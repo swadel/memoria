@@ -102,8 +102,6 @@ CREATE INDEX IF NOT EXISTS idx_media_status ON media_items(status);
 CREATE INDEX IF NOT EXISTS idx_media_classification ON media_items(classification);
 CREATE INDEX IF NOT EXISTS idx_media_date_review ON media_items(date_needs_review);
 CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
-CREATE INDEX IF NOT EXISTS idx_media_review_reason ON media_items(review_reason);
-CREATE INDEX IF NOT EXISTS idx_media_duplicate_cluster ON media_items(duplicate_cluster_id);
         "#,
     )?;
     ensure_column(&conn, "media_items", "review_reason", "TEXT")?;
@@ -114,6 +112,14 @@ CREATE INDEX IF NOT EXISTS idx_media_duplicate_cluster ON media_items(duplicate_
     ensure_column(&conn, "media_items", "is_live_photo_video", "INTEGER DEFAULT 0")?;
     ensure_column(&conn, "media_items", "live_photo_pair_key", "TEXT")?;
     ensure_column(&conn, "media_items", "content_identifier", "TEXT")?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_review_reason ON media_items(review_reason)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_duplicate_cluster ON media_items(duplicate_cluster_id)",
+        [],
+    )?;
     Ok(conn)
 }
 
