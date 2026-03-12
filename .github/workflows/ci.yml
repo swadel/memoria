@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  frontend:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: TypeScript lint
+        run: npm run lint
+
+      - name: Frontend build
+        run: npm run build
+
+  rust:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Prepare resource placeholders (Windows)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor | Out-Null
+          New-Item -ItemType File -Force -Path vendor/exiftool.exe | Out-Null
+          New-Item -ItemType File -Force -Path vendor/ffmpeg.exe | Out-Null
+          New-Item -ItemType Directory -Force -Path src-tauri/icons | Out-Null
+          if (!(Test-Path src-tauri/icons/icon.ico)) {
+            Add-Type -AssemblyName System.Drawing
+            $bmp = New-Object System.Drawing.Bitmap 32,32
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.Clear([System.Drawing.Color]::FromArgb(255, 240, 240, 240))
+            $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+            $fs = [System.IO.File]::Open("src-tauri/icons/icon.ico", [System.IO.FileMode]::Create)
+            $icon.Save($fs)
+            $fs.Close()
+            $g.Dispose()
+            $bmp.Dispose()
+          }
+
+      - name: Rust check
+        run: npm run check:rust
+
+      - name: Rust tests
+        run: npm run test:rust
