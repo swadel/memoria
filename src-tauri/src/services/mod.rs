@@ -4,5 +4,5 @@ pub mod date_enforcer;
 pub mod event_grouper;
 pub mod exiftool;
 pub mod file_organizer;
-pub mod icloud_bridge;
+pub mod review_rules;
 pub mod settings;

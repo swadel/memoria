@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS media_items (
     classification      TEXT,
     classification_source TEXT,
     ai_classification_raw TEXT,
+    review_reason       TEXT,
+    review_reason_details TEXT,
+    duplicate_cluster_id TEXT,
+    duplicate_rank      INTEGER,
+    duplicate_score     REAL,
+    is_live_photo_video INTEGER DEFAULT 0,
+    live_photo_pair_key TEXT,
+    content_identifier  TEXT,
     status              TEXT DEFAULT 'queued',
     error_message       TEXT,
     event_group_id      INTEGER REFERENCES event_groups(id),
@@ -94,8 +102,18 @@ CREATE INDEX IF NOT EXISTS idx_media_status ON media_items(status);
 CREATE INDEX IF NOT EXISTS idx_media_classification ON media_items(classification);
 CREATE INDEX IF NOT EXISTS idx_media_date_review ON media_items(date_needs_review);
 CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
+CREATE INDEX IF NOT EXISTS idx_media_review_reason ON media_items(review_reason);
+CREATE INDEX IF NOT EXISTS idx_media_duplicate_cluster ON media_items(duplicate_cluster_id);
         "#,
     )?;
+    ensure_column(&conn, "media_items", "review_reason", "TEXT")?;
+    ensure_column(&conn, "media_items", "review_reason_details", "TEXT")?;
+    ensure_column(&conn, "media_items", "duplicate_cluster_id", "TEXT")?;
+    ensure_column(&conn, "media_items", "duplicate_rank", "INTEGER")?;
+    ensure_column(&conn, "media_items", "duplicate_score", "REAL")?;
+    ensure_column(&conn, "media_items", "is_live_photo_video", "INTEGER DEFAULT 0")?;
+    ensure_column(&conn, "media_items", "live_photo_pair_key", "TEXT")?;
+    ensure_column(&conn, "media_items", "content_identifier", "TEXT")?;
     Ok(conn)
 }
 
@@ -151,7 +169,7 @@ pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
 
 pub fn get_review_queue(conn: &Connection) -> Result<Vec<MediaItemDto>> {
     let mut stmt = conn.prepare(
-        "SELECT id, filename, COALESCE(current_path, ''), classification, status, date_taken,
+        "SELECT id, filename, COALESCE(current_path, ''), classification, review_reason, review_reason_details, duplicate_cluster_id, status, date_taken,
          date_needs_review, date_taken_confidence, event_group_id
          FROM media_items WHERE classification='review' ORDER BY id DESC",
     )?;
@@ -161,11 +179,14 @@ pub fn get_review_queue(conn: &Connection) -> Result<Vec<MediaItemDto>> {
             filename: row.get(1)?,
             current_path: row.get(2)?,
             classification: row.get(3)?,
-            status: row.get(4)?,
-            date_taken: row.get(5)?,
-            date_needs_review: row.get::<_, i64>(6)? == 1,
-            ai_confidence: row.get(7)?,
-            event_group_id: row.get(8)?,
+            review_reason: row.get(4)?,
+            review_reason_details: row.get(5)?,
+            duplicate_cluster_id: row.get(6)?,
+            status: row.get(7)?,
+            date_taken: row.get(8)?,
+            date_needs_review: row.get::<_, i64>(9)? == 1,
+            ai_confidence: row.get(10)?,
+            event_group_id: row.get(11)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -236,6 +257,22 @@ pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
         .optional()?)
 }
 
+fn ensure_column(conn: &Connection, table: &str, column: &str, sql_type: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}"),
+        [],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +302,36 @@ mod tests {
         set_setting(&conn, "k", "v").expect("set setting");
         let v = get_setting(&conn, "k").expect("get setting");
         assert_eq!(v.as_deref(), Some("v"));
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn review_queue_returns_reason_and_duplicate_cluster_fields() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("db init");
+
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, classification, review_reason, review_reason_details, duplicate_cluster_id, status, date_needs_review)
+             VALUES(?1, ?2, ?3, 'review', ?4, ?5, ?6, 'classified', 0)",
+            [
+                "r1",
+                "IMG_DUP.JPG",
+                r"C:\tmp\IMG_DUP.JPG",
+                "duplicate_non_best",
+                r#"{"reason":"duplicate_non_best","rank":2}"#,
+                "cluster-abc",
+            ],
+        )
+        .expect("insert review row");
+
+        let queue = get_review_queue(&conn).expect("review queue");
+        assert_eq!(queue.len(), 1);
+        let item = &queue[0];
+        assert_eq!(item.review_reason.as_deref(), Some("duplicate_non_best"));
+        assert_eq!(item.duplicate_cluster_id.as_deref(), Some("cluster-abc"));
+        assert!(item.review_reason_details.as_deref().unwrap_or("").contains("\"rank\":2"));
 
         drop(conn);
         let _ = fs::remove_file(db_path);

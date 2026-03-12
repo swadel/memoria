@@ -5,7 +5,7 @@ use tauri::State;
 
 use crate::{
     models::DateEstimateDto,
-    services::{classifier, date_enforcer, exiftool},
+    services::{classifier, date_enforcer, exiftool, review_rules},
     AppState,
 };
 
@@ -15,6 +15,7 @@ pub fn run_classification(state: State<'_, AppState>) -> Result<(), String> {
         let conn = state.open_conn().map_err(|e| e.to_string())?;
         let ai = state.ai_client().await;
         classifier::run(&conn, &ai).await.map_err(|e| e.to_string())?;
+        review_rules::apply(&conn, &ai).await.map_err(|e| e.to_string())?;
         stage_review_items(&conn, &state).await.map_err(|e| e.to_string())?;
         date_enforcer::evaluate(&conn, &ai)
             .await
@@ -32,6 +33,12 @@ pub fn get_review_queue(state: State<'_, AppState>) -> Result<Vec<crate::models:
 #[tauri::command]
 pub fn apply_review_action(ids: Vec<i64>, action: String, state: State<'_, AppState>) -> Result<(), String> {
     tauri::async_runtime::block_on(apply_review_action_impl(ids, &action, &state))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn confirm_duplicate_keep(media_item_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    tauri::async_runtime::block_on(confirm_duplicate_keep_impl(media_item_id, &state))
         .map_err(|e| e.to_string())
 }
 
@@ -70,9 +77,20 @@ async fn apply_review_action_impl(ids: Vec<i64>, action: &str, state: &AppState)
         };
         conn.execute(
             "UPDATE media_items
-             SET classification=?1, classification_source='user', current_path=?2, status=?3, updated_at=CURRENT_TIMESTAMP
-             WHERE id=?4",
-            params![new_class, target.to_string_lossy().to_string(), new_status, id],
+             SET classification=?1, classification_source='user', review_reason=?2, review_reason_details=?3, current_path=?4, status=?5, updated_at=CURRENT_TIMESTAMP
+             WHERE id=?6",
+            params![
+                new_class,
+                if action == "delete" { Some("user_marked_delete".to_string()) } else { None },
+                if action == "delete" {
+                    Some(serde_json::json!({"reason":"user_marked_delete"}).to_string())
+                } else {
+                    None
+                },
+                target.to_string_lossy().to_string(),
+                new_status,
+                id
+            ],
         )?;
         conn.execute(
             "INSERT INTO audit_log(media_item_id, action, source, new_value)
@@ -80,6 +98,65 @@ async fn apply_review_action_impl(ids: Vec<i64>, action: &str, state: &AppState)
             params![id, new_class],
         )?;
     }
+    Ok(())
+}
+
+async fn confirm_duplicate_keep_impl(media_item_id: i64, state: &AppState) -> Result<()> {
+    let conn = state.open_conn()?;
+    confirm_duplicate_keep_with_conn(&conn, media_item_id)
+}
+
+fn confirm_duplicate_keep_with_conn(conn: &rusqlite::Connection, media_item_id: i64) -> Result<()> {
+    let (cluster_id, filename): (Option<String>, String) = conn.query_row(
+        "SELECT duplicate_cluster_id, filename FROM media_items WHERE id=?1",
+        [media_item_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let Some(cluster_id) = cluster_id.filter(|v| !v.trim().is_empty()) else {
+        return Err(anyhow::anyhow!("Selected media item is not part of a duplicate cluster."));
+    };
+
+    conn.execute(
+        "UPDATE media_items
+         SET classification='legitimate', classification_source='user', review_reason=NULL,
+             review_reason_details=?1, status='classified', updated_at=CURRENT_TIMESTAMP
+         WHERE id=?2",
+        params![
+            serde_json::json!({
+                "reason":"duplicate_keep_confirmed",
+                "clusterId": cluster_id,
+                "confirmedByUser": true
+            })
+            .to_string(),
+            media_item_id
+        ],
+    )?;
+    conn.execute(
+        "UPDATE media_items
+         SET classification='review', classification_source='rule', review_reason='duplicate_non_best',
+             review_reason_details=?1, status='classified', updated_at=CURRENT_TIMESTAMP
+         WHERE duplicate_cluster_id=?2 AND id != ?3 AND (classification IS NULL OR classification != 'deleted')",
+        params![
+            serde_json::json!({
+                "reason":"duplicate_non_best",
+                "clusterId": cluster_id,
+                "winnerId": media_item_id,
+                "winnerFilename": filename
+            })
+            .to_string(),
+            cluster_id,
+            media_item_id
+        ],
+    )?;
+    conn.execute(
+        "INSERT INTO audit_log(media_item_id, action, source, new_value, details)
+         VALUES(?1, 'duplicate_keep_confirmed', 'user', ?2, ?3)",
+        params![
+            media_item_id,
+            "legitimate",
+            serde_json::json!({"clusterId": cluster_id, "winnerFilename": filename}).to_string()
+        ],
+    )?;
     Ok(())
 }
 
@@ -130,4 +207,66 @@ async fn stage_review_items(conn: &rusqlite::Connection, state: &AppState) -> Re
         let _ = exiftool::create_thumbnail_ffmpeg(&target, &thumb_path).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::confirm_duplicate_keep_with_conn;
+    use crate::db::init_db;
+    use rusqlite::params;
+    use std::fs;
+
+    fn temp_db_path() -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("memoria-classify-cmd-test-{}.db", rand::random::<u64>()));
+        p
+    }
+
+    #[test]
+    fn confirm_duplicate_keep_updates_cluster_members() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, classification, review_reason, duplicate_cluster_id, status)
+             VALUES(?1, ?2, ?3, 'review', 'duplicate_keep_suggestion', ?4, 'classified')",
+            params!["d1", "IMG_DUP_1.JPG", "C:\\tmp\\IMG_DUP_1.JPG", "cluster-1"],
+        )
+        .expect("insert candidate keep");
+        let keep_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, classification, review_reason, duplicate_cluster_id, status)
+             VALUES(?1, ?2, ?3, 'review', 'duplicate_non_best', ?4, 'classified')",
+            params!["d2", "IMG_DUP_2.JPG", "C:\\tmp\\IMG_DUP_2.JPG", "cluster-1"],
+        )
+        .expect("insert candidate non-best");
+
+        confirm_duplicate_keep_with_conn(&conn, keep_id).expect("confirm keep");
+
+        let keep_class: String = conn
+            .query_row("SELECT classification FROM media_items WHERE id=?1", [keep_id], |r| r.get(0))
+            .expect("keep classification");
+        assert_eq!(keep_class, "legitimate");
+
+        let other_reason: String = conn
+            .query_row(
+                "SELECT review_reason FROM media_items WHERE id != ?1 AND duplicate_cluster_id='cluster-1'",
+                [keep_id],
+                |r| r.get(0),
+            )
+            .expect("other review reason");
+        assert_eq!(other_reason, "duplicate_non_best");
+
+        let audit_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE action='duplicate_keep_confirmed' AND media_item_id=?1",
+                [keep_id],
+                |r| r.get(0),
+            )
+            .expect("audit row count");
+        assert_eq!(audit_count, 1);
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
 }

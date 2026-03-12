@@ -20,6 +20,9 @@ pub struct MediaItemDto {
     pub filename: String,
     pub current_path: String,
     pub classification: Option<String>,
+    pub review_reason: Option<String>,
+    pub review_reason_details: Option<String>,
+    pub duplicate_cluster_id: Option<String>,
     pub status: String,
     pub date_taken: Option<String>,
     pub date_needs_review: bool,
@@ -52,7 +55,6 @@ pub struct EventGroupDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInput {
-    pub date_range_start: String,
-    pub date_range_end: String,
+    pub working_directory: String,
     pub output_directory: String,
 }

@@ -25,6 +25,9 @@ export interface MediaItem {
   filename: string;
   currentPath: string;
   classification: "legitimate" | "review" | "deleted" | null;
+  reviewReason: string | null;
+  reviewReasonDetails: string | null;
+  duplicateClusterId: string | null;
   status: ProcessingStatus;
   dateTaken: string | null;
   dateNeedsReview: boolean;

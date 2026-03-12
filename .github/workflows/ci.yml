@@ -6,7 +6,27 @@ on:
   pull_request:
 
 jobs:
-  frontend:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript lint
+        run: npm run lint
+
+  frontend-build:
+    needs: lint
     strategy:
       fail-fast: false
       matrix:
@@ -26,13 +46,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: TypeScript lint
-        run: npm run lint
-
       - name: Frontend build
         run: npm run build
 
-  rust:
+  rust-tests:
+    needs: lint
     runs-on: windows-latest
 
     steps:
@@ -74,5 +92,5 @@ jobs:
       - name: Rust check
         run: npm run check:rust
 
-      - name: Rust tests
+      - name: Rust tests (includes review-rule and duplicate workflow tests)
         run: npm run test:rust

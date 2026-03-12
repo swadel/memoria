@@ -22,11 +22,30 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
         let (id, filename, file_size, mime_type, current_path) = row?;
         let lower = filename.to_ascii_lowercase();
 
-        let (classification, source, raw) = if lower.ends_with(".gif")
-            || lower.contains("screenshot")
-            || (mime_type.contains("image") && file_size < 50_000)
-        {
-            ("review".to_string(), "rule".to_string(), None)
+        let (classification, source, raw, review_reason, review_reason_details) = if lower.ends_with(".gif") {
+            (
+                "review".to_string(),
+                "rule".to_string(),
+                None,
+                Some("gif".to_string()),
+                Some(serde_json::json!({"reason":"gif","filename": filename}).to_string()),
+            )
+        } else if lower.contains("screenshot") {
+            (
+                "review".to_string(),
+                "rule".to_string(),
+                None,
+                Some("screenshot".to_string()),
+                Some(serde_json::json!({"reason":"screenshot","filename": filename}).to_string()),
+            )
+        } else if mime_type.contains("image") && file_size < 50_000 {
+            (
+                "review".to_string(),
+                "rule".to_string(),
+                None,
+                Some("low_confidence".to_string()),
+                Some(serde_json::json!({"reason":"tiny_image","fileSize": file_size}).to_string()),
+            )
         } else {
             let res = ai
                 .classify_image(&filename, file_size, Some(current_path.as_str()))
@@ -37,19 +56,32 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
                 "confidence": res.confidence
             })
             .to_string());
-            let class = if res.confidence >= 0.90 {
-                res.category
+            let class = if res.confidence >= 0.90 { res.category.clone() } else { "review".to_string() };
+            let reason = if class == "review" {
+                if res.confidence < 0.90 {
+                    Some("low_confidence".to_string())
+                } else {
+                    Some("meme_or_non_legitimate".to_string())
+                }
             } else {
-                "review".to_string()
+                None
             };
-            (class, source, raw)
+            let details = reason.as_ref().map(|r| {
+                serde_json::json!({
+                    "reason": r,
+                    "aiCategory": res.category,
+                    "confidence": res.confidence
+                })
+                .to_string()
+            });
+            (class, source, raw, reason, details)
         };
 
         conn.execute(
             "UPDATE media_items
-             SET classification=?1, classification_source=?2, ai_classification_raw=?3, status='classified', updated_at=CURRENT_TIMESTAMP
-             WHERE id=?4",
-            params![classification, source, raw, id],
+             SET classification=?1, classification_source=?2, ai_classification_raw=?3, review_reason=?4, review_reason_details=?5, status='classified', updated_at=CURRENT_TIMESTAMP
+             WHERE id=?6",
+            params![classification, source, raw, review_reason, review_reason_details, id],
         )?;
     }
 
@@ -96,7 +128,7 @@ mod tests {
         )
         .expect("insert media2");
 
-        let ai = AiClient::new(None);
+        let ai = AiClient::new(None, None, crate::services::ai_client::AiRoutingConfig::default());
         run(&conn, &ai).await.expect("classification run");
 
         let classified_count: i64 = conn

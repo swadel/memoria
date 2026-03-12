@@ -11,17 +11,23 @@ pub struct MetadataInfo {
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub mime_type: Option<String>,
+    pub duration_secs: Option<f64>,
+    pub content_identifier: Option<String>,
 }
 
 pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
     let output = Command::new("exiftool")
         .arg("-j")
+        .arg("-n")
         .arg("-DateTimeOriginal")
         .arg("-CreateDate")
         .arg("-ModifyDate")
         .arg("-ImageWidth")
         .arg("-ImageHeight")
         .arg("-MIMEType")
+        .arg("-Duration")
+        .arg("-ContentIdentifier")
+        .arg("-ComAppleQuickTimeContentIdentifier")
         .arg(path)
         .output()
         .await;
@@ -58,6 +64,25 @@ pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
             .get("MIMEType")
             .and_then(|v| v.as_str())
             .map(ToString::to_string),
+        duration_secs: first
+            .get("Duration")
+            .and_then(|v| v.as_f64())
+            .or_else(|| {
+                first
+                    .get("Duration")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<f64>().ok())
+            }),
+        content_identifier: first
+            .get("ContentIdentifier")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string)
+            .or_else(|| {
+                first
+                    .get("ComAppleQuickTimeContentIdentifier")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+            }),
     })
 }
 

@@ -2,9 +2,19 @@ import { invoke } from "@tauri-apps/api/core";
 import type { DashboardStats, DateEstimate, EventGroup, MediaItem } from "../types";
 
 export interface SessionInput {
-  dateRangeStart: string;
-  dateRangeEnd: string;
+  workingDirectory: string;
   outputDirectory: string;
+}
+
+export interface AppConfiguration {
+  workingDirectory: string;
+  outputDirectory: string;
+  aiTaskModels: {
+    classification: { provider: string; model: string };
+    dateEstimation: { provider: string; model: string };
+    eventNaming: { provider: string; model: string };
+    duplicateRanking: { provider: string; model: string };
+  };
 }
 
 export function initializeApp() {
@@ -19,16 +29,28 @@ export function setOutputDirectory(path: string) {
   return invoke<void>("set_output_directory", { path });
 }
 
-export function setIcloudCredentials(username: string, password: string, twoFactorCode?: string) {
-  return invoke<void>("set_icloud_credentials", {
-    username,
-    password,
-    two_factor_code: twoFactorCode ?? null
-  });
+export function setWorkingDirectory(path: string) {
+  return invoke<void>("set_working_directory", { path });
 }
 
 export function setOpenAiKey(apiKey: string) {
   return invoke<void>("set_openai_key", { api_key: apiKey });
+}
+
+export function setAnthropicKey(apiKey: string) {
+  return invoke<void>("set_anthropic_key", { api_key: apiKey });
+}
+
+export function setAiTaskModel(
+  task: "classification" | "dateEstimation" | "eventNaming" | "duplicateRanking",
+  provider: "openai" | "anthropic",
+  model: string
+) {
+  return invoke<void>("set_ai_task_model", { task, provider, model });
+}
+
+export function getAppConfiguration() {
+  return invoke<AppConfiguration>("get_app_configuration");
 }
 
 export function getDashboardStats() {
@@ -45,6 +67,10 @@ export function getReviewQueue() {
 
 export function applyReviewAction(ids: number[], action: "include" | "delete") {
   return invoke<void>("apply_review_action", { ids, action });
+}
+
+export function confirmDuplicateKeep(mediaItemId: number) {
+  return invoke<void>("confirm_duplicate_keep", { media_item_id: mediaItemId });
 }
 
 export function getDateReviewQueue() {
