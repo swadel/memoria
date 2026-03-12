@@ -223,20 +223,6 @@ memoria/
     ffmpeg.exe
 ```
 
----
-
-## Roadmap
-
-- [x] Architecture & planning
-- [ ] Phase 1 — iCloud authentication, download pipeline, metadata extraction
-- [ ] Phase 2 — Rule-based and AI classification, review queue UI
-- [ ] Phase 3 — Date metadata enforcement, EXIF writing, approval workflow
-- [ ] Phase 4 — Event clustering, AI naming, folder organization
-- [ ] Phase 5 — Polish, performance, Windows installer, code signing
-- [ ] macOS support (stretch goal)
-
----
-
 ## Acknowledgments
 
 - [pyicloud](https://github.com/picklepete/pyicloud) — iCloud web API access
