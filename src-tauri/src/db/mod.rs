@@ -102,7 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_media_status ON media_items(status);
 CREATE INDEX IF NOT EXISTS idx_media_classification ON media_items(classification);
 CREATE INDEX IF NOT EXISTS idx_media_date_review ON media_items(date_needs_review);
 CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
-        "#,
+f        "#,
     )?;
     ensure_column(&conn, "media_items", "review_reason", "TEXT")?;
     ensure_column(&conn, "media_items", "review_reason_details", "TEXT")?;

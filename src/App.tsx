@@ -527,19 +527,28 @@ export function App() {
         <div className="card">
           <h3>Settings</h3>
           <p className="muted">Configuration only needs a working directory and your OpenAI API key.</p>
+          <h4 className="settingsSectionTitle">Directories</h4>
+          <div className="row settingsDirectoriesRow">
+            <div className="settingsField">
+              <label className="fieldLabel">Working Directory</label>
+              <input
+                style={{ minWidth: 320 }}
+                placeholder="C:\\Memoria\\inbox"
+                value={workingDirectory}
+                onChange={(e) => setWorkingDirectoryState(e.target.value)}
+              />
+            </div>
+            <div className="settingsField">
+              <label className="fieldLabel">Output Directory</label>
+              <input
+                style={{ minWidth: 320 }}
+                placeholder="C:\\Memoria"
+                value={outputDirectory}
+                onChange={(e) => setOutputDirectoryState(e.target.value)}
+              />
+            </div>
+          </div>
           <div className="row">
-            <input
-              style={{ minWidth: 320 }}
-              placeholder="Working directory containing your photos/videos"
-              value={workingDirectory}
-              onChange={(e) => setWorkingDirectoryState(e.target.value)}
-            />
-            <input
-              style={{ minWidth: 320 }}
-              placeholder="Output directory for Memoria folders"
-              value={outputDirectory}
-              onChange={(e) => setOutputDirectoryState(e.target.value)}
-            />
             <button
               className="primaryBtn"
               onClick={async () => {
@@ -557,6 +566,7 @@ export function App() {
               Save Directories
             </button>
           </div>
+          <h4 className="settingsSectionTitle">API Keys</h4>
           <div className="row">
             <input
               type="password"
@@ -593,6 +603,7 @@ export function App() {
               Save Anthropic Key
             </button>
           </div>
+          <h4 className="settingsSectionTitle">AI Task Models</h4>
           <div className="row">
             <ModelSelector
               label="Classification"
