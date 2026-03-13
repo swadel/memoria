@@ -3,6 +3,7 @@ import {
   CARD_BUTTON_HEIGHT,
   CARD_GAP,
   CARD_LABEL_HEIGHT,
+  CARD_PADDING,
   ITEM_HEIGHT,
   MIN_ITEM_WIDTH,
   THUMBNAIL_SIZE,
@@ -36,9 +37,10 @@ describe("responsiveGrid helpers", () => {
 
   it("uses expected virtualized item height constants", () => {
     expect(THUMBNAIL_SIZE).toBe(180);
-    expect(CARD_LABEL_HEIGHT).toBe(48);
-    expect(CARD_BUTTON_HEIGHT).toBe(40);
+    expect(CARD_LABEL_HEIGHT).toBe(52);
+    expect(CARD_BUTTON_HEIGHT).toBe(44);
+    expect(CARD_PADDING).toBe(20);
     expect(CARD_GAP).toBe(12);
-    expect(ITEM_HEIGHT).toBe(280);
+    expect(ITEM_HEIGHT).toBe(308);
   });
 });

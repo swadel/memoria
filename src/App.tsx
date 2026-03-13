@@ -31,6 +31,7 @@ import {
   CARD_BUTTON_HEIGHT,
   CARD_GAP,
   CARD_LABEL_HEIGHT,
+  CARD_PADDING,
   ITEM_HEIGHT,
   MIN_ITEM_WIDTH,
   THUMBNAIL_SIZE,
@@ -1060,7 +1061,9 @@ function EventGroupDetailView({
   onMoveSelected: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollWrapperRef = useRef<HTMLDivElement>(null);
   const [columnCount, setColumnCount] = useState(4);
+  const [scrollHeight, setScrollHeight] = useState(500);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1076,6 +1079,18 @@ function EventGroupDetailView({
 
     observer.observe(container);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const updateHeight = () => {
+      if (scrollWrapperRef.current) {
+        const rect = scrollWrapperRef.current.getBoundingClientRect();
+        setScrollHeight(Math.max(240, window.innerHeight - rect.top - 16));
+      }
+    };
+    updateHeight();
+    window.addEventListener("resize", updateHeight);
+    return () => window.removeEventListener("resize", updateHeight);
   }, []);
 
   const rowCount = calculateRowCount(items.length, columnCount);
@@ -1148,27 +1163,29 @@ function EventGroupDetailView({
           </button>
         </div>
       )}
-      <div
-        className="eventVirtualGridViewport"
-        ref={containerRef}
-        data-testid="event-virtual-grid"
-        data-column-count={columnCount}
-        data-row-count={rowCount}
-        style={{
-          height: "calc(100vh - 160px)",
-          overflow: "auto",
-          position: "relative"
-        }}
-      >
+      <div ref={scrollWrapperRef} style={{ flex: 1 }}>
         <div
-          data-testid="event-virtual-grid-inner"
-          data-total-size={rowVirtualizer.getTotalSize()}
+          className="eventVirtualGridViewport"
+          ref={containerRef}
+          data-testid="event-virtual-grid"
+          data-column-count={columnCount}
+          data-row-count={rowCount}
+          data-scroll-height={scrollHeight}
           style={{
-            height: `${rowVirtualizer.getTotalSize()}px`,
-            position: "relative",
-            width: "100%"
+            height: `${scrollHeight}px`,
+            overflow: "auto",
+            position: "relative"
           }}
         >
+          <div
+            data-testid="event-virtual-grid-inner"
+            data-total-size={rowVirtualizer.getTotalSize()}
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              position: "relative",
+              width: "100%"
+            }}
+          >
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const startIndex = virtualRow.index * columnCount;
             const rowItems = items.slice(startIndex, startIndex + columnCount);
@@ -1219,6 +1236,7 @@ function EventGroupDetailView({
               </div>
             );
           })}
+          </div>
         </div>
       </div>
     </div>
@@ -1261,12 +1279,13 @@ function EventThumbCard({
     <div
       className={selected ? "eventThumbCard selected" : "eventThumbCard"}
       data-testid={`event-media-item-${item.id}`}
+      data-thumbnail-card
       style={{
         ...style,
-        height: ITEM_HEIGHT - CARD_GAP,
+        minHeight: ITEM_HEIGHT - CARD_GAP,
         display: "flex",
         flexDirection: "column",
-        overflow: "hidden"
+        overflow: "visible"
       }}
     >
       <button
@@ -1299,7 +1318,7 @@ function EventThumbCard({
       </div>
       <div
         style={{
-          padding: "0 8px 8px",
+          padding: `0 8px ${CARD_PADDING - 12}px`,
           marginTop: "auto",
           flexShrink: 0
         }}

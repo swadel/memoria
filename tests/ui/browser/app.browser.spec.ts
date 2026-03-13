@@ -145,6 +145,18 @@ test.describe("Memoria browser UI smoke", () => {
     await expect(page.getByTestId("event-group-detail-view")).toBeVisible();
 
     const grid = page.getByTestId("event-virtual-grid");
+    const firstCard = page.locator("[data-thumbnail-card]").first();
+    const overflowValue = await firstCard.evaluate((el) => window.getComputedStyle(el).overflow);
+    expect(overflowValue).not.toBe("hidden");
+
+    await page.setViewportSize({ width: 1200, height: 760 });
+    const initialScrollHeight = Number(await grid.getAttribute("data-scroll-height"));
+    expect(initialScrollHeight).toBeGreaterThan(0);
+
+    await page.setViewportSize({ width: 1200, height: 980 });
+    const resizedScrollHeight = Number(await grid.getAttribute("data-scroll-height"));
+    expect(resizedScrollHeight).toBeGreaterThan(initialScrollHeight);
+
     const cases = [{ width: 800 }, { width: 1280 }, { width: 1440 }, { width: 1920 }];
     const observedColumns: number[] = [];
 
