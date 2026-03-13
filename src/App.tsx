@@ -1,5 +1,9 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { AppShell } from "./components/AppShell";
+import { PageHeader } from "./components/PageHeader";
+import { ReviewToolbar } from "./components/ReviewToolbar";
+import { WorkflowStepper, type WorkflowStepState } from "./components/WorkflowStepper";
 import {
   applyDateApproval,
   completeImageReviewAndStartVideoReview,
@@ -93,6 +97,35 @@ function derivePipelineStages(stats: DashboardStats): Record<PipelineStage, Pipe
     group: stats.grouped > 0 || stats.filed > 0 ? "completed" : dateCompleted ? "idle" : "idle",
     finalize: stats.filed > 0 ? "completed" : "idle"
   };
+}
+
+function deriveWorkflowStepStates(
+  pipelineStages: Record<PipelineStage, PipelineStageState>,
+  activeTab: Tab
+): Array<{ id: PipelineStage; label: string; state: WorkflowStepState }> {
+  const tabToStage: Record<Tab, PipelineStage> = {
+    dashboard: "index",
+    images: "image",
+    videos: "video",
+    dates: "date",
+    events: "group",
+    settings: "finalize"
+  };
+  const activeStage = tabToStage[activeTab];
+  const ordered: Array<{ id: PipelineStage; label: string }> = [
+    { id: "index", label: "Index" },
+    { id: "image", label: "Images" },
+    { id: "video", label: "Videos" },
+    { id: "date", label: "Dates" },
+    { id: "group", label: "Groups" },
+    { id: "finalize", label: "Finalize" }
+  ];
+  return ordered.map((step) => {
+    const stage = pipelineStages[step.id];
+    if (stage === "completed") return { ...step, state: "complete" as const };
+    if (step.id === activeStage || stage === "running") return { ...step, state: "current" as const };
+    return { ...step, state: "pending" as const };
+  });
 }
 
 export function App() {
@@ -305,6 +338,46 @@ export function App() {
     () => (stats.dateNeedsReview > 0 ? `4) Date Enforcement (${stats.dateNeedsReview} pending)` : "4) Date Enforcement"),
     [stats.dateNeedsReview]
   );
+  const dashboardSummary = useMemo(
+    () =>
+      `${stats.imageReview} images, ${stats.videoFlagged} videos, ${stats.dateNeedsReview} dates and ${groups.length} groups currently in review queues.`,
+    [stats.imageReview, stats.videoFlagged, stats.dateNeedsReview, groups.length]
+  );
+  const dashboardPrimaryAction = useMemo(() => {
+    if (stats.total === 0) {
+      return {
+        label: "Start Indexing",
+        onClick: () => void onStart(),
+        disabled: busyAction !== null
+      };
+    }
+    if (stats.imagePhaseState !== "complete") {
+      return {
+        label: "Resume Image Review",
+        onClick: () => setTab("images"),
+        disabled: busyAction !== null
+      };
+    }
+    if (stats.videoPhaseState !== "complete") {
+      return {
+        label: "Continue Video Review",
+        onClick: () => setTab("videos"),
+        disabled: busyAction !== null
+      };
+    }
+    if (stats.dateNeedsReview > 0) {
+      return {
+        label: "Review Dates",
+        onClick: () => setTab("dates"),
+        disabled: busyAction !== null
+      };
+    }
+    return {
+      label: "Open Event Groups",
+      onClick: () => setTab("events"),
+      disabled: busyAction !== null
+    };
+  }, [stats.total, stats.imagePhaseState, stats.videoPhaseState, stats.dateNeedsReview, busyAction]);
 
   const normalizedGroupNames = useMemo(() => new Set(groups.map((group) => normalizeName(group.name))), [groups]);
   const activeGroup = useMemo(
@@ -428,58 +501,75 @@ export function App() {
   }
 
   return (
-    <div className="layout" data-testid="layout-root">
-      <div className="topbar">
-        <div>
-          <h1 className="title">Memoria</h1>
-          <p className="subtitle">Local Media Organizer</p>
+    <AppShell
+      title="Memoria"
+      subtitle="Local Media Organizer"
+      status={message || "Ready"}
+      stepper={<WorkflowStepper steps={deriveWorkflowStepStates(pipelineStages, tab)} />}
+      navigation={
+        <div className="tabStrip" data-testid="tab-strip">
+          <button data-testid="tab-dashboard" className={tab === "dashboard" ? "tab active" : "tab"} onClick={() => setTab("dashboard")}>
+            Dashboard
+          </button>
+          <button
+            data-testid="tab-images"
+            className={tab === "images" ? "tab active" : "tab"}
+            onClick={() => setTab("images")}
+            disabled={stats.total === 0}
+          >
+            Image Review {stats.imageFlaggedPending > 0 ? `(${stats.imageFlaggedPending})` : ""}
+          </button>
+          <button
+            data-testid="tab-videos"
+            className={tab === "videos" ? "tab active" : "tab"}
+            onClick={() => setTab("videos")}
+            disabled={stats.imagePhaseState !== "complete"}
+          >
+            Video Review {stats.videoUnreviewedFlagged > 0 ? `(${stats.videoUnreviewedFlagged})` : ""}
+          </button>
+          <button
+            data-testid="tab-dates"
+            className={tab === "dates" ? "tab active" : "tab"}
+            onClick={() => setTab("dates")}
+            disabled={stats.videoPhaseState !== "complete"}
+          >
+            Date Approval
+          </button>
+          <button
+            data-testid="tab-events"
+            className={tab === "events" ? "tab active" : "tab"}
+            onClick={() => setTab("events")}
+            disabled={stats.dateNeedsReview > 0 || stats.videoPhaseState !== "complete"}
+          >
+            Event Groups
+          </button>
+          <button data-testid="tab-settings" className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>
+            Settings
+          </button>
         </div>
-        <div className="statusPill" data-testid="status-pill">{message || "Ready"}</div>
-      </div>
-
-      <div className="tabStrip" data-testid="tab-strip">
-        <button data-testid="tab-dashboard" className={tab === "dashboard" ? "tab active" : "tab"} onClick={() => setTab("dashboard")}>
-          Dashboard
-        </button>
-        <button
-          data-testid="tab-images"
-          className={tab === "images" ? "tab active" : "tab"}
-          onClick={() => setTab("images")}
-          disabled={stats.total === 0}
-        >
-          Image Review {stats.imageFlaggedPending > 0 ? `(${stats.imageFlaggedPending})` : ""}
-        </button>
-        <button
-          data-testid="tab-videos"
-          className={tab === "videos" ? "tab active" : "tab"}
-          onClick={() => setTab("videos")}
-          disabled={stats.imagePhaseState !== "complete"}
-        >
-          Video Review {stats.videoUnreviewedFlagged > 0 ? `(${stats.videoUnreviewedFlagged})` : ""}
-        </button>
-        <button
-          data-testid="tab-dates"
-          className={tab === "dates" ? "tab active" : "tab"}
-          onClick={() => setTab("dates")}
-          disabled={stats.videoPhaseState !== "complete"}
-        >
-          Date Approval
-        </button>
-        <button
-          data-testid="tab-events"
-          className={tab === "events" ? "tab active" : "tab"}
-          onClick={() => setTab("events")}
-          disabled={stats.dateNeedsReview > 0 || stats.videoPhaseState !== "complete"}
-        >
-          Event Groups
-        </button>
-        <button data-testid="tab-settings" className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>
-          Settings
-        </button>
-      </div>
+      }
+    >
 
       {tab === "dashboard" && (
         <>
+          <div className="card dashboardHero">
+            <PageHeader
+              title="Workflow Overview"
+              summary={dashboardSummary}
+              action={
+                <button className="primaryBtn" onClick={dashboardPrimaryAction.onClick} disabled={dashboardPrimaryAction.disabled} data-testid="dashboard-primary-action">
+                  {dashboardPrimaryAction.label}
+                </button>
+              }
+            />
+            <div className="reviewQueueGrid">
+              <QueueSummaryCard title="Images Needing Review" value={stats.imageReview} subtitle="Flagged for image review decisions" />
+              <QueueSummaryCard title="Videos Needing Review" value={stats.videoFlagged} subtitle="Flagged clips before date checks" />
+              <QueueSummaryCard title="Dates Needing Approval" value={stats.dateNeedsReview} subtitle="Awaiting date approval actions" />
+              <QueueSummaryCard title="Groups Awaiting Review" value={groups.length} subtitle="Event groups ready for curation" />
+            </div>
+          </div>
+
           <div className="statsGrid" data-testid="dashboard-stats-grid">
             <StatCard label="Total" value={stats.total} testId="stat-total" />
             <StatCard label="Indexed" value={stats.indexed} testId="stat-indexed" />
@@ -492,7 +582,7 @@ export function App() {
           </div>
 
           <div className="card" data-testid="dashboard-pipeline-card">
-            <h3>Run Pipeline</h3>
+            <PageHeader title="Run Pipeline" summary="Each phase unlocks the next; resume from any highlighted step." />
             <div className="row">
               <button
                 data-testid="pipeline-index"
@@ -542,9 +632,14 @@ export function App() {
               >
                 {busyAction === "finalize" ? "Finalizing..." : "6) Finalize"}
               </button>
+            </div>
+            <div className="muted" data-testid="pipeline-phase-help">
+              {"Pipeline order: Index -> Image Review -> Video Review -> Date Enforcement -> Group -> Finalize."}
+            </div>
+            <div className="row" style={{ justifyContent: "flex-end", marginTop: 6 }}>
               <button
                 data-testid="pipeline-reset-session"
-                className="secondaryBtn"
+                className="textBtn"
                 disabled={busyAction !== null}
                 onClick={() => {
                   setResetError("");
@@ -554,16 +649,16 @@ export function App() {
                 {busyAction === "reset" ? "Resetting..." : "Reset Session"}
               </button>
             </div>
-            <div className="muted" data-testid="pipeline-phase-help">
-              {"Pipeline order: Index -> Image Review -> Video Review -> Date Enforcement -> Group -> Finalize."}
-            </div>
           </div>
         </>
       )}
 
       {tab === "dates" && (
         <div className="card" data-testid="date-approval-card">
-          <h3>Date Metadata Approval</h3>
+          <PageHeader
+            title="Date Approval"
+            summary={`${dateItems.length} items are awaiting approval. Confirm, edit, or skip each date estimate.`}
+          />
           <div className="dateApprovalGrid">
             {dateItems.map((item) => (
               <DateCard
@@ -591,6 +686,10 @@ export function App() {
 
       {tab === "images" && (
         <div className="card" data-testid="image-review-card">
+          <PageHeader
+            title="Image Review"
+            summary={`${imageItems.filter((item) => item.status !== "excluded").length} active images in review.`}
+          />
           <ImageReviewView
             items={imageItems}
             showExcluded={showExcludedImages}
@@ -630,6 +729,10 @@ export function App() {
 
       {tab === "videos" && (
         <div className="card" data-testid="video-review-card">
+          <PageHeader
+            title="Video Review"
+            summary={`${videoItems.filter((item) => item.status !== "excluded").length} active videos in this stage.`}
+          />
           <VideoReviewView
             items={videoItems}
             excludedCount={stats.videoExcluded}
@@ -650,6 +753,10 @@ export function App() {
 
       {tab === "events" && (
         <div className="card" data-testid="event-groups-card">
+          <PageHeader
+            title="Event Groups"
+            summary={activeGroup ? `${activeGroup.itemCount} active items in this group.` : `${groups.length} groups in review.`}
+          />
           {activeGroup ? (
             <EventGroupDetailView
               group={activeGroup}
@@ -777,7 +884,7 @@ export function App() {
 
       {tab === "settings" && (
         <div className="card" data-testid="settings-card">
-          <h3>Settings</h3>
+          <PageHeader title="Settings" summary="Manage directories, API keys, AI models, and dependency health." />
           <h4 className="settingsSectionTitle" data-testid="settings-section-tool-health">Dependency Health</h4>
           <div className="item" data-testid="settings-tool-health-card">
             <div className="row" style={{ justifyContent: "space-between" }}>
@@ -1075,7 +1182,7 @@ export function App() {
           </div>
         </div>
       )}
-    </div>
+    </AppShell>
   );
 }
 
@@ -1097,6 +1204,16 @@ function StatCard({ label, value, danger, testId }: { label: string; value: numb
     <div className="card statCard" data-testid={testId}>
       <div className="muted">{label}</div>
       <div className={danger ? "statValue danger" : "statValue"}>{value}</div>
+    </div>
+  );
+}
+
+function QueueSummaryCard({ title, value, subtitle }: { title: string; value: number; subtitle: string }) {
+  return (
+    <div className="queueSummaryCard">
+      <div className="queueSummaryValue">{value}</div>
+      <div className="queueSummaryTitle">{title}</div>
+      <div className="muted">{subtitle}</div>
     </div>
   );
 }
@@ -1151,23 +1268,37 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
           }
         }}
       />
-      <strong className="truncateOneLine">{item.filename}</strong>
-      <div className="muted">Current: {item.currentDate ?? "(missing)"}</div>
-      <div className="muted">AI: {item.aiDate ?? "(none)"} ({Math.round(item.confidence * 100)}%)</div>
-      <div className="muted">{item.reasoning}</div>
-      <div className="row">
+      <div className="dateMetaStack">
+        <strong className="truncateOneLine">{item.filename}</strong>
+        <div className="muted">Current date: {item.currentDate ?? "(missing)"}</div>
+        <div className="muted">Suggested date: {item.aiDate ?? "(none)"} • Confidence {Math.round(item.confidence * 100)}%</div>
+        <div className="muted">{item.reasoning}</div>
+      </div>
+      <div className="row dateActionRow">
         <input type="date" data-testid={`date-input-${item.mediaItemId}`} value={value} onChange={(e) => setValue(e.target.value)} />
         <button
           data-testid={`date-approve-${item.mediaItemId}`}
+          className="primaryBtn"
           disabled={busyAction !== null}
+          onClick={() => {
+            void handleApply(value || item.aiDate || null, "approve");
+          }}
+        >
+          {busyAction === "approve" ? "Approving..." : "Approve"}
+        </button>
+        <button
+          data-testid={`date-edit-${item.mediaItemId}`}
+          className="secondaryBtn"
+          disabled={busyAction !== null || value.trim().length === 0}
           onClick={() => {
             void handleApply(value || null, "approve");
           }}
         >
-          {busyAction === "approve" ? "Approving..." : "Approve/Edit"}
+          {busyAction === "approve" ? "Saving..." : "Edit Date"}
         </button>
         <button
           data-testid={`date-skip-${item.mediaItemId}`}
+          className="secondaryBtn"
           disabled={busyAction !== null}
           onClick={() => {
             void handleApply(null, "skip");
@@ -1820,39 +1951,46 @@ function ImageReviewView({
 
   return (
     <div data-testid="image-review-view">
-      <h3 style={{ marginTop: 0 }}>Image Review</h3>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
-        <div className="row">
-          <button data-testid="image-show-active" className={showExcluded ? "secondaryBtn" : "primaryBtn"} onClick={() => onToggleShowExcluded(false)}>
-            Show active
-          </button>
-          <button data-testid="image-show-excluded" className={showExcluded ? "primaryBtn" : "secondaryBtn"} onClick={() => onToggleShowExcluded(true)}>
-            Show excluded
-          </button>
-        </div>
-        <div className="muted" data-testid="image-filter-summary">Showing {flaggedCount} flagged, {unflaggedCount} unflagged - {baseItems.length} total</div>
-      </div>
+      <ReviewToolbar
+        testId="image-mode-toolbar"
+        left={
+          <div className="row">
+            <button data-testid="image-show-active" className={showExcluded ? "secondaryBtn" : "primaryBtn"} onClick={() => onToggleShowExcluded(false)}>
+              Active
+            </button>
+            <button data-testid="image-show-excluded" className={showExcluded ? "primaryBtn" : "secondaryBtn"} onClick={() => onToggleShowExcluded(true)}>
+              Excluded
+            </button>
+          </div>
+        }
+        right={<div className="muted" data-testid="image-filter-summary">Showing {flaggedCount} flagged, {unflaggedCount} unflagged - {baseItems.length} total</div>}
+      />
 
-      <div className="item" data-testid="image-filter-bar">
-        <div className="row">
-          <button data-testid="image-filter-all" className={viewMode === "all" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("all")}>All Images</button>
-          <button data-testid="image-filter-flagged" className={viewMode === "flagged" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("flagged")}>Flagged Only</button>
-          <button data-testid="image-filter-burst" className={viewMode === "burst" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("burst")}>Burst Groups</button>
-          <select data-testid="image-sort" value={sortMode} onChange={(e) => setSortMode(e.target.value as "date" | "size" | "sharpness")}>
-            <option value="date">Date</option>
-            <option value="size">File Size</option>
-            <option value="sharpness">Sharpness Score</option>
-          </select>
-        </div>
-        <div className="row">
-          <button data-testid="image-select-all-flagged" className="secondaryBtn" onClick={() => setSelectedIds(visibleItems.filter((i) => i.imageFlags.length > 0).map((i) => i.id))}>
-            Select All Flagged
-          </button>
-          <button data-testid="image-exclude-selected" className="primaryBtn" disabled={selectedIds.length === 0} onClick={() => setShowBulkConfirm(true)}>
-            Exclude Selected
-          </button>
-        </div>
-      </div>
+      <ReviewToolbar
+        testId="image-filter-bar"
+        left={
+          <div className="row">
+            <button data-testid="image-filter-all" className={viewMode === "all" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("all")}>All Images</button>
+            <button data-testid="image-filter-flagged" className={viewMode === "flagged" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("flagged")}>Flagged Only</button>
+            <button data-testid="image-filter-burst" className={viewMode === "burst" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("burst")}>Burst Groups</button>
+            <select data-testid="image-sort" value={sortMode} onChange={(e) => setSortMode(e.target.value as "date" | "size" | "sharpness")}>
+              <option value="date">Date</option>
+              <option value="size">File Size</option>
+              <option value="sharpness">Sharpness Score</option>
+            </select>
+          </div>
+        }
+        right={
+          <div className="row">
+            <button data-testid="image-select-all-flagged" className="secondaryBtn" onClick={() => setSelectedIds(visibleItems.filter((i) => i.imageFlags.length > 0).map((i) => i.id))}>
+              Select All Flagged
+            </button>
+            <button data-testid="image-exclude-selected" className="secondaryBtn dangerBtn" disabled={selectedIds.length === 0} onClick={() => setShowBulkConfirm(true)}>
+              Exclude Selected
+            </button>
+          </div>
+        }
+      />
 
       {showBulkConfirm && selectedIds.length > 0 ? (
         <div className="item" data-testid="image-bulk-confirm">
@@ -2236,44 +2374,79 @@ function VideoReviewView({
 
   return (
     <div data-testid="video-review-view">
-      <h3 style={{ marginTop: 0 }}>Video Review</h3>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
-        <div className="row">
-          <button data-testid="video-show-active" className={showExcluded ? "secondaryBtn" : "primaryBtn"} onClick={() => onToggleShowExcluded(false)}>
-            Show active
-          </button>
-          <button data-testid="video-show-excluded" className={showExcluded ? "primaryBtn" : "secondaryBtn"} onClick={() => onToggleShowExcluded(true)}>
-            Show excluded
-          </button>
-        </div>
-        <div data-testid="video-filter-summary" className="muted">
-          {activeFilter === "size"
-            ? `Showing videos under ${sizeThresholdMb} MB`
-            : `Showing videos under ${durationThresholdSecs} sec`}
-        </div>
-      </div>
+      <ReviewToolbar
+        testId="video-mode-toolbar"
+        left={
+          <div className="row">
+            <button data-testid="video-show-active" className={showExcluded ? "secondaryBtn" : "primaryBtn"} onClick={() => onToggleShowExcluded(false)}>
+              Active
+            </button>
+            <button data-testid="video-show-excluded" className={showExcluded ? "primaryBtn" : "secondaryBtn"} onClick={() => onToggleShowExcluded(true)}>
+              Excluded
+            </button>
+          </div>
+        }
+        right={
+          <div data-testid="video-filter-summary" className="muted">
+            {activeFilter === "size"
+              ? `Showing videos under ${sizeThresholdMb} MB`
+              : `Showing videos under ${durationThresholdSecs} sec`}
+          </div>
+        }
+      />
 
-      <div className="item" data-testid="video-filter-bar">
-        <div className="row">
-          <label>
-            <input
-              data-testid="video-filter-mode-size"
-              type="radio"
-              checked={activeFilter === "size"}
-              onChange={() => setActiveFilter("size")}
-            />
-            Filter by Size
-          </label>
-          <label>
-            <input
-              data-testid="video-filter-mode-duration"
-              type="radio"
-              checked={activeFilter === "duration"}
-              onChange={() => setActiveFilter("duration")}
-            />
-            Filter by Duration
-          </label>
-        </div>
+      <ReviewToolbar
+        testId="video-filter-bar"
+        left={
+          <div className="row">
+            <label>
+              <input
+                data-testid="video-filter-mode-size"
+                type="radio"
+                checked={activeFilter === "size"}
+                onChange={() => setActiveFilter("size")}
+              />
+              Filter by Size
+            </label>
+            <label>
+              <input
+                data-testid="video-filter-mode-duration"
+                type="radio"
+                checked={activeFilter === "duration"}
+                onChange={() => setActiveFilter("duration")}
+              />
+              Filter by Duration
+            </label>
+          </div>
+        }
+        right={
+          <div className="row">
+            <button data-testid="video-select-all-filtered" className="secondaryBtn" onClick={() => setSelectedIds(filtered.map((item) => item.id))}>
+              Select All Filtered
+            </button>
+            {showExcluded ? (
+              <button
+                data-testid="video-restore-selected"
+                className="secondaryBtn"
+                disabled={selectedIds.length === 0}
+                onClick={() => void handleRestore(selectedIds)}
+              >
+                Restore Selected
+              </button>
+            ) : (
+              <button
+                data-testid="video-exclude-selected"
+                className="secondaryBtn dangerBtn"
+                disabled={selectedIds.length === 0}
+                onClick={() => void handleExclude(selectedIds)}
+              >
+                Exclude Selected
+              </button>
+            )}
+          </div>
+        }
+      />
+      <div className="item mediaControlsStack">
         <label htmlFor="video-size-slider">Show videos under {sizeThresholdMb} MB</label>
         <input
           id="video-size-slider"
@@ -2296,30 +2469,6 @@ function VideoReviewView({
           disabled={activeFilter !== "duration"}
           onChange={(e) => setDurationThresholdSecs(Number(e.target.value))}
         />
-        <div className="row">
-          <button data-testid="video-select-all-filtered" className="secondaryBtn" onClick={() => setSelectedIds(filtered.map((item) => item.id))}>
-            Select All Filtered
-          </button>
-          {showExcluded ? (
-            <button
-              data-testid="video-restore-selected"
-              className="primaryBtn"
-              disabled={selectedIds.length === 0}
-              onClick={() => void handleRestore(selectedIds)}
-            >
-              Restore Selected
-            </button>
-          ) : (
-            <button
-              data-testid="video-exclude-selected"
-              className="primaryBtn"
-              disabled={selectedIds.length === 0}
-              onClick={() => void handleExclude(selectedIds)}
-            >
-              Exclude Selected
-            </button>
-          )}
-        </div>
       </div>
 
       <div ref={scrollWrapperRef}>

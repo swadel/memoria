@@ -21,53 +21,150 @@ body {
   width: 100%;
   min-height: 100vh;
   margin: 0;
-  padding: 28px 24px 48px;
+  padding: 20px 22px 40px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+}
+
+.appShellHeader {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  backdrop-filter: blur(8px);
+  padding-bottom: 4px;
+}
+
+.appShellContent {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .topbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .title {
   margin: 0;
-  font-size: 34px;
-  font-weight: 600;
+  font-size: 28px;
+  font-weight: 620;
   letter-spacing: -0.02em;
 }
 
 .subtitle {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: #6e6e73;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .statusPill {
-  padding: 9px 14px;
+  padding: 7px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: rgba(255, 255, 255, 0.86);
   color: #4b5563;
   font-size: 12px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.workflowStepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.05);
+  overflow-x: auto;
+}
+
+.workflowStepWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.workflowStep {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  font-size: 12px;
+}
+
+.workflowStepIndex {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.workflowStepLabel {
+  font-weight: 560;
+}
+
+.workflowStepComplete {
+  background: #ecfdf3;
+  color: #0a7a32;
+  border-color: #b7f0ca;
+}
+
+.workflowStepComplete .workflowStepIndex {
+  background: #22c55e;
+  color: #fff;
+}
+
+.workflowStepCurrent {
+  background: #e6f1ff;
+  color: #005bb5;
+  border-color: #abd2ff;
+}
+
+.workflowStepCurrent .workflowStepIndex {
+  background: #0a6de3;
+  color: #fff;
+}
+
+.workflowStepPending {
+  background: #f8f8fa;
+  color: #6b7280;
+  border-color: #e5e7eb;
+}
+
+.workflowStepPending .workflowStepIndex {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.workflowStepConnector {
+  width: 12px;
+  height: 1px;
+  background: #d1d5db;
 }
 
 .tabStrip {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 5px;
+  padding: 6px;
   border-radius: 14px;
   width: 100%;
-  background: rgba(255, 255, 255, 0.75);
-  border: 1px solid rgba(0, 0, 0, 0.07);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.07);
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.05);
 }
 
 .tab {
@@ -75,7 +172,7 @@ body {
   border: 1px solid transparent;
   background: transparent;
   color: #4b5563;
-  padding: 8px 14px;
+  padding: 7px 12px;
   transition: all 0.2s ease;
 }
 
@@ -85,18 +182,45 @@ body {
 
 .tab.active {
   background: #ffffff;
-  border-color: rgba(0, 0, 0, 0.07);
+  border-color: rgba(0, 0, 0, 0.06);
   color: #111827;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
 }
 
 .card {
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 18px;
-  padding: 18px;
+  padding: 16px;
   backdrop-filter: blur(14px);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.06);
+}
+
+.pageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pageTitle {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.pageSummary {
+  margin: 4px 0 0;
+  color: #6e6e73;
+  font-size: 13px;
+}
+
+.pageHeaderAction {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .row {
@@ -143,6 +267,24 @@ button:hover {
 
 .secondaryBtn {
   background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.textBtn {
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  padding: 8px 10px;
+}
+
+.textBtn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.dangerBtn {
+  color: #9f1239;
+  border-color: rgba(190, 24, 93, 0.25);
+  background: #fff1f2;
 }
 
 .stageBtn {
@@ -211,8 +353,8 @@ button:hover {
 
 .dateApprovalGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 14px;
 }
 
 .eventGroupsGrid {
@@ -222,10 +364,33 @@ button:hover {
 }
 
 .item {
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 14px;
   padding: 12px;
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.reviewToolbar {
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.reviewToolbarLeft,
+.reviewToolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mediaControlsStack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .eventGroupCard {
@@ -265,18 +430,19 @@ button:hover {
 
 .eventThumbCard {
   position: relative;
-  border: 2px solid rgba(0, 0, 0, 0.08);
-  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
   padding: 8px;
   background: #ffffff;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: 0 3px 8px rgba(17, 24, 39, 0.05);
 }
 
 .eventThumbCard.selected {
-  border-color: #0071e3;
-  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.18);
+  border-color: #0a6de3;
+  box-shadow: 0 0 0 3px rgba(10, 109, 227, 0.15);
 }
 
 .eventThumbSelectButton {
@@ -293,9 +459,9 @@ button:hover {
 
 .eventThumbImage {
   width: 100%;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 4 / 3;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
 .eventThumbMeta {
@@ -328,18 +494,28 @@ button:hover {
 
 .dateThumb {
   width: 100%;
-  max-width: 600px;
-  aspect-ratio: 1 / 1;
+  max-width: 100%;
+  aspect-ratio: 4 / 3;
   object-fit: cover;
-  border-radius: 10px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
   margin-bottom: 8px;
 }
 
 .dateItemCard {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+}
+
+.dateMetaStack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dateActionRow {
+  justify-content: space-between;
 }
 
 .truncateOneLine {
@@ -394,13 +570,45 @@ button:hover {
 }
 
 .statCard {
-  min-height: 88px;
+  min-height: 84px;
 }
 
 .statValue {
   margin-top: 8px;
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 650;
   letter-spacing: -0.02em;
+}
+
+.dashboardHero {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reviewQueueGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.queueSummaryCard {
+  border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: #ffffff;
+  padding: 12px;
+}
+
+.queueSummaryValue {
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+
+.queueSummaryTitle {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
 }
 

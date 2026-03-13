@@ -2,8 +2,9 @@ use anyhow::Result;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime};
 use reqwest::Client;
 use rusqlite::{params, Connection};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use tokio::time::{Duration, Instant};
 
 use super::{
     ai_client::{AiClient, EventNameSuggestion, EventNamingRequest},
@@ -12,6 +13,9 @@ use super::{
 
 const CLUSTER_GAP_DAYS: i64 = 2;
 const CLUSTER_SPAN_SPLIT_DAYS: i64 = 14;
+const NOMINATIM_REVERSE_URL: &str = "https://nominatim.openstreetmap.org/reverse";
+const NOMINATIM_USER_AGENT: &str = "Memoria/1.0 (photo organizer app)";
+const NOMINATIM_MIN_REQUEST_INTERVAL_MS: u64 = 1100;
 
 #[derive(Debug, Clone)]
 struct ClusterItem {
@@ -61,6 +65,7 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
     );
 
     let http = Client::new();
+    let mut geocoder = ReverseGeocoder::new();
     let mut total_groups = 0_i64;
     for (year, mut items) in by_year {
         items.sort_by_key(|x| x.capture_at);
@@ -73,7 +78,7 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
 
         let mut queue = clusters;
         while let Some(cluster) = queue.pop() {
-            let naming = name_cluster(year, &cluster, ai, &http).await?;
+            let naming = name_cluster(year, &cluster, ai, &http, &mut geocoder).await?;
             let lowered = naming.folder_name.to_ascii_lowercase();
             if cluster.len() > 20 && (lowered == "family gathering" || lowered == "misc") {
                 let split = split_cluster_at_largest_gap(&cluster);
@@ -134,6 +139,7 @@ async fn name_cluster(
     cluster: &[ClusterItem],
     ai: &AiClient,
     http: &Client,
+    geocoder: &mut ReverseGeocoder,
 ) -> Result<EventNameSuggestion> {
     if cluster.len() < 3 {
         return Ok(EventNameSuggestion {
@@ -154,7 +160,7 @@ async fn name_cluster(
     let start_date = cluster.first().map(|x| x.capture_at.date()).expect("cluster item");
     let end_date = cluster.last().map(|x| x.capture_at.date()).expect("cluster item");
     let day_count = (end_date - start_date).num_days() + 1;
-    let location_hint = find_location_hint(cluster, http).await?;
+    let location_hint = find_location_hint(cluster, http, geocoder).await?;
     let request = EventNamingRequest {
         start_date: start_date.to_string(),
         end_date: end_date.to_string(),
@@ -189,35 +195,124 @@ fn apply_low_confidence_fallback_if_needed(
     Ok(fallback)
 }
 
-async fn find_location_hint(cluster: &[ClusterItem], http: &Client) -> Result<Option<String>> {
+async fn find_location_hint(
+    cluster: &[ClusterItem],
+    http: &Client,
+    geocoder: &mut ReverseGeocoder,
+) -> Result<Option<String>> {
     for item in cluster {
         let path = Path::new(item.current_path.as_str());
         if let Some((lat, lon)) = exiftool::read_gps_coordinates(path).await? {
-            if let Some((city, country)) = reverse_geocode_open_meteo(http, lat, lon).await? {
-                return Ok(Some(format!(
-                    "GPS data suggests these photos were taken in: {city}, {country}"
-                )));
+            let result = geocoder.reverse_geocode(http, lat, lon).await;
+            if let Some(hint) = location_hint_from_geocode_result(lat, lon, result) {
+                return Ok(Some(hint));
             }
         }
     }
     Ok(None)
 }
 
-async fn reverse_geocode_open_meteo(
+fn location_hint_from_geocode_result(
+    lat: f64,
+    lon: f64,
+    result: Result<Option<(String, String)>>,
+) -> Option<String> {
+    match result {
+        Ok(Some((city, country))) => Some(format!(
+            "GPS data suggests these photos were taken in: {city}, {country}"
+        )),
+        Ok(None) => None,
+        Err(err) => {
+            runtime_log::warn(
+                "event_grouper",
+                format!("Reverse geocoding failed for ({lat}, {lon}): {err}"),
+            );
+            None
+        }
+    }
+}
+
+struct ReverseGeocoder {
+    cache: HashMap<String, Option<(String, String)>>,
+    last_request_at: Option<Instant>,
+    min_interval: Duration,
+}
+
+impl ReverseGeocoder {
+    fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+            last_request_at: None,
+            min_interval: Duration::from_millis(NOMINATIM_MIN_REQUEST_INTERVAL_MS),
+        }
+    }
+
+    async fn reverse_geocode(&mut self, http: &Client, latitude: f64, longitude: f64) -> Result<Option<(String, String)>> {
+        self.reverse_geocode_with_transport(latitude, longitude, |lat, lon| async move {
+            reverse_geocode_nominatim(http, lat, lon).await
+        })
+        .await
+    }
+
+    async fn reverse_geocode_with_transport<F, Fut>(
+        &mut self,
+        latitude: f64,
+        longitude: f64,
+        transport: F,
+    ) -> Result<Option<(String, String)>>
+    where
+        F: FnOnce(f64, f64) -> Fut,
+        Fut: std::future::Future<Output = Result<Option<(String, String)>>>,
+    {
+        let key = geocode_cache_key(latitude, longitude);
+        if let Some(cached) = self.cache.get(&key) {
+            return Ok(cached.clone());
+        }
+        self.enforce_rate_limit().await;
+        let value = transport(latitude, longitude).await?;
+        self.cache.insert(key, value.clone());
+        Ok(value)
+    }
+
+    async fn enforce_rate_limit(&mut self) {
+        if let Some(last_request_at) = self.last_request_at {
+            let elapsed = last_request_at.elapsed();
+            if elapsed < self.min_interval {
+                tokio::time::sleep(self.min_interval - elapsed).await;
+            }
+        }
+        self.last_request_at = Some(Instant::now());
+    }
+}
+
+fn geocode_cache_key(latitude: f64, longitude: f64) -> String {
+    format!("{latitude:.2}:{longitude:.2}")
+}
+
+fn build_nominatim_reverse_request(
+    http: &Client,
+    latitude: f64,
+    longitude: f64,
+) -> Result<reqwest::Request> {
+    Ok(http
+        .get(NOMINATIM_REVERSE_URL)
+        .query(&[
+            ("lat", latitude.to_string()),
+            ("lon", longitude.to_string()),
+            ("format", "json".to_string()),
+        ])
+        .header("User-Agent", NOMINATIM_USER_AGENT)
+        .build()?)
+}
+
+async fn reverse_geocode_nominatim(
     http: &Client,
     latitude: f64,
     longitude: f64,
 ) -> Result<Option<(String, String)>> {
+    let request = build_nominatim_reverse_request(http, latitude, longitude)?;
     let value = http
-        .get("https://geocoding-api.open-meteo.com/v1/reverse")
-        .query(&[
-            ("latitude", latitude.to_string()),
-            ("longitude", longitude.to_string()),
-            ("count", "1".to_string()),
-            ("language", "en".to_string()),
-            ("format", "json".to_string()),
-        ])
-        .send()
+        .execute(request)
         .await?
         .error_for_status()?
         .json::<serde_json::Value>()
@@ -490,24 +585,127 @@ mod tests {
 
     #[test]
     fn location_hint_parses_when_present_or_absent() {
-        let open_meteo = serde_json::json!({
-            "results": [{"name":"Portland", "country":"United States"}]
-        });
-        assert_eq!(
-            extract_city_country(&open_meteo),
-            Some(("Portland".to_string(), "United States".to_string()))
-        );
-
-        let mocked_nominatim = serde_json::json!({
+        let nominatim_city = serde_json::json!({
             "address": {"city":"Portland","country":"United States"}
         });
         assert_eq!(
-            extract_city_country(&mocked_nominatim),
+            extract_city_country(&nominatim_city),
             Some(("Portland".to_string(), "United States".to_string()))
+        );
+
+        let nominatim_town = serde_json::json!({
+            "address": {"town":"Bend","country":"United States"}
+        });
+        assert_eq!(
+            extract_city_country(&nominatim_town),
+            Some(("Bend".to_string(), "United States".to_string()))
+        );
+
+        let nominatim_village = serde_json::json!({
+            "address": {"village":"Cannon Beach","country":"United States"}
+        });
+        assert_eq!(
+            extract_city_country(&nominatim_village),
+            Some(("Cannon Beach".to_string(), "United States".to_string()))
         );
 
         let none = serde_json::json!({});
         assert_eq!(extract_city_country(&none), None);
+    }
+
+    #[test]
+    fn nominatim_request_uses_correct_url_and_query() {
+        let client = Client::new();
+        let req = build_nominatim_reverse_request(&client, 45.5231, -122.6765).expect("request");
+        assert_eq!(req.url().scheme(), "https");
+        assert_eq!(req.url().host_str(), Some("nominatim.openstreetmap.org"));
+        assert_eq!(req.url().path(), "/reverse");
+        let query = req.url().query().unwrap_or_default();
+        assert!(query.contains("lat=45.5231"));
+        assert!(query.contains("lon=-122.6765"));
+        assert!(query.contains("format=json"));
+    }
+
+    #[test]
+    fn nominatim_request_contains_user_agent_header() {
+        let client = Client::new();
+        let req = build_nominatim_reverse_request(&client, 45.52, -122.67).expect("request");
+        let ua = req
+            .headers()
+            .get("User-Agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(ua, NOMINATIM_USER_AGENT);
+    }
+
+    #[tokio::test]
+    async fn geocoding_failure_is_non_fatal_for_location_hint_resolution() {
+        let hint = location_hint_from_geocode_result(
+            45.52,
+            -122.67,
+            Err(anyhow::anyhow!("mocked geocoder failure")),
+        );
+        assert!(hint.is_none());
+    }
+
+    #[test]
+    fn cache_key_rounds_to_two_decimals() {
+        let k1 = geocode_cache_key(45.5231, -122.6765);
+        let k2 = geocode_cache_key(45.5249, -122.6789);
+        assert_eq!(k1, k2);
+    }
+
+    #[tokio::test]
+    async fn rounded_coordinate_cache_hits_without_second_transport_call() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let mut geocoder = ReverseGeocoder::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let first_calls = Arc::clone(&calls);
+        let first = geocoder
+            .reverse_geocode_with_transport(45.5231, -122.6765, move |_lat, _lon| async move {
+                first_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(("Portland".to_string(), "United States".to_string())))
+            })
+            .await
+            .expect("first geocode");
+        let second_calls = Arc::clone(&calls);
+        let second = geocoder
+            .reverse_geocode_with_transport(45.5249, -122.6789, move |_lat, _lon| async move {
+                second_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(("Portland".to_string(), "United States".to_string())))
+            })
+            .await
+            .expect("second geocode");
+        assert_eq!(first, second);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_delays_second_uncached_request() {
+        let mut geocoder = ReverseGeocoder {
+            cache: HashMap::new(),
+            last_request_at: None,
+            min_interval: Duration::from_millis(200),
+        };
+        let _ = geocoder
+            .reverse_geocode_with_transport(45.10, -122.10, |_lat, _lon| async {
+                Ok(Some(("A".to_string(), "B".to_string())))
+            })
+            .await
+            .expect("first");
+        let started = Instant::now();
+        let _ = geocoder
+            .reverse_geocode_with_transport(46.10, -123.10, |_lat, _lon| async {
+                Ok(Some(("A".to_string(), "B".to_string())))
+            })
+            .await
+            .expect("second");
+        assert!(started.elapsed() >= Duration::from_millis(180));
     }
 
     #[test]

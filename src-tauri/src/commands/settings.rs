@@ -225,9 +225,9 @@ async fn reset_session_impl(
 fn clear_pipeline_state(conn: &mut rusqlite::Connection) -> AnyResult<()> {
     let tx = conn.transaction()?;
     delete_table_rows_if_exists(&tx, "audit_log")?;
+    delete_table_rows_if_exists(&tx, "media_items")?;
     delete_table_rows_if_exists(&tx, "event_groups")?;
     delete_table_rows_if_exists(&tx, "download_sessions")?;
-    delete_table_rows_if_exists(&tx, "media_items")?;
     if table_exists(&tx, "media_items_old")? {
         tx.execute("DROP TABLE IF EXISTS media_items_old", [])?;
     }
@@ -347,15 +347,15 @@ mod tests {
         db::set_setting(&conn, "working_directory", r"C:\Photos\Inbox").expect("set working");
         db::set_setting(&conn, "output_directory", r"C:\Memoria\Output").expect("set output");
         conn.execute(
-            "INSERT INTO media_items(icloud_id, filename, status) VALUES(?1, ?2, 'grouped')",
-            ["reset-1", "IMG_1.JPG"],
-        )
-        .expect("insert media");
-        conn.execute(
             "INSERT INTO event_groups(year, name, folder_name) VALUES(2026, 'Trip', '2026 - Trip')",
             [],
         )
         .expect("insert group");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, status, event_group_id) VALUES(?1, ?2, 'grouped', ?3)",
+            rusqlite::params!["reset-1", "IMG_1.JPG", 1_i64],
+        )
+        .expect("insert media");
         conn.execute(
             "INSERT INTO download_sessions(date_range_start, date_range_end, status, output_directory)
              VALUES('local', 'local', 'completed', ?1)",
@@ -389,6 +389,46 @@ mod tests {
                 .as_deref(),
             Some(r"C:\Memoria\Output")
         );
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn clear_pipeline_state_handles_group_foreign_key_relationships() {
+        let db_path = temp_db_path();
+        let mut conn = init_db(&db_path).expect("init db");
+        conn.execute(
+            "INSERT INTO event_groups(id, year, name, folder_name) VALUES(1, 2026, 'Trip', '2026 - Trip')",
+            [],
+        )
+        .expect("insert group");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, status, event_group_id) VALUES(?1, ?2, 'grouped', ?3)",
+            rusqlite::params!["fk-1", "IMG_FK.JPG", 1_i64],
+        )
+        .expect("insert media");
+        let media_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO audit_log(media_item_id, action, source) VALUES(?1, 'seeded', 'test')",
+            [media_id],
+        )
+        .expect("insert audit");
+
+        clear_pipeline_state(&mut conn).expect("clear state");
+
+        let media_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0))
+            .expect("media count");
+        let group_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM event_groups", [], |r| r.get(0))
+            .expect("group count");
+        let audit_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0))
+            .expect("audit count");
+        assert_eq!(media_count, 0);
+        assert_eq!(group_count, 0);
+        assert_eq!(audit_count, 0);
 
         drop(conn);
         let _ = fs::remove_file(db_path);
