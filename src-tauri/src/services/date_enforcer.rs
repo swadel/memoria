@@ -3,13 +3,14 @@ use chrono::{Datelike, Utc};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
-use super::{ai_client::AiClient, exiftool};
+use super::{ai_client::AiClient, exiftool, runtime_log};
 
 fn is_invalid_date(value: &str) -> bool {
     value.starts_with("1970:01:01") || value.starts_with("0000:00:00")
 }
 
 pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
+    runtime_log::info("date_enforcer", "Starting missing-date evaluation.");
     let mut stmt = conn.prepare(
         "SELECT id, filename, COALESCE(current_path, ''), date_taken
          FROM media_items
@@ -25,8 +26,16 @@ pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
         ))
     })?;
 
+    let mut processed = 0_i64;
+    let mut flagged_for_review = 0_i64;
+    let mut verified = 0_i64;
     for row in rows {
         let (id, filename, path, db_date) = row?;
+        processed += 1;
+        runtime_log::info(
+            "date_enforcer",
+            format!("Evaluating item id={id} filename='{}' path='{}'.", filename, path),
+        );
         let meta = exiftool::read_metadata(PathBuf::from(&path).as_path()).await?;
         let dt = meta.date_time_original.or(db_date);
         let bad = match dt.as_deref() {
@@ -49,6 +58,14 @@ pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
                  WHERE id=?2",
                 params![raw, id],
             )?;
+            flagged_for_review += 1;
+            runtime_log::info(
+                "date_enforcer",
+                format!(
+                    "Flagged id={id} for date review. ai_date={:?} confidence={:.2}.",
+                    estimate.ai_date, estimate.confidence
+                ),
+            );
         } else {
             let normalized = normalize_exif_date(dt.unwrap_or_default().as_str());
             conn.execute(
@@ -57,12 +74,31 @@ pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
                  WHERE id=?2",
                 params![normalized, id],
             )?;
+            verified += 1;
+            runtime_log::info(
+                "date_enforcer",
+                format!("Verified id={id} with normalized date '{}'.", normalized),
+            );
         }
     }
+    runtime_log::info(
+        "date_enforcer",
+        format!(
+            "Finished evaluation. processed={} flagged_for_review={} verified={}.",
+            processed, flagged_for_review, verified
+        ),
+    );
     Ok(())
 }
 
 pub async fn apply_date_approval(conn: &Connection, media_item_id: i64, date: Option<String>) -> Result<()> {
+    runtime_log::info(
+        "date_enforcer",
+        format!(
+            "Applying date approval for id={media_item_id}. mode={}.",
+            if date.is_some() { "approve" } else { "skip" }
+        ),
+    );
     if let Some(value) = date {
         let file_path: String = conn.query_row(
             "SELECT COALESCE(current_path, '') FROM media_items WHERE id=?1",
@@ -81,6 +117,10 @@ pub async fn apply_date_approval(conn: &Connection, media_item_id: i64, date: Op
              VALUES(?1, 'date_set', 'user', ?2, ?3)",
             params![media_item_id, value, "{\"approved\":true}"],
         )?;
+        runtime_log::info(
+            "date_enforcer",
+            format!("Approved id={media_item_id} with date '{}'.", value),
+        );
     } else {
         conn.execute(
             "UPDATE media_items
@@ -93,6 +133,7 @@ pub async fn apply_date_approval(conn: &Connection, media_item_id: i64, date: Op
              VALUES(?1, 'date_skipped', 'user', ?2)",
             params![media_item_id, "{\"approved\":false}"],
         )?;
+        runtime_log::info("date_enforcer", format!("Skipped date approval for id={media_item_id}."));
     }
     Ok(())
 }

@@ -3,9 +3,10 @@ use chrono::{Datelike, NaiveDate};
 use rusqlite::{params, Connection};
 use std::collections::BTreeMap;
 
-use super::ai_client::AiClient;
+use super::{ai_client::AiClient, runtime_log};
 
 pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
+    runtime_log::info("event_grouper", "Starting event grouping run.");
     conn.execute("DELETE FROM event_groups", [])?;
     conn.execute("UPDATE media_items SET event_group_id=NULL WHERE status='date_verified'", [])?;
 
@@ -24,19 +25,30 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
     })?;
 
     let mut by_year: BTreeMap<i32, Vec<(i64, NaiveDate, String, String)>> = BTreeMap::new();
+    let mut eligible_items = 0_i64;
     for row in rows {
         let (id, date_raw, filename, current_path) = row?;
         if let Ok(d) = NaiveDate::parse_from_str(&date_raw, "%Y-%m-%d") {
+            eligible_items += 1;
             by_year
                 .entry(d.year())
                 .or_default()
                 .push((id, d, filename, current_path));
         }
     }
+    runtime_log::info(
+        "event_grouper",
+        format!("Found {eligible_items} date-verified items across {} years.", by_year.len()),
+    );
 
+    let mut total_groups = 0_i64;
     for (year, mut items) in by_year {
         items.sort_by_key(|(_, d, _, _)| *d);
         let clusters = cluster_by_days(items, 3);
+        runtime_log::info(
+            "event_grouper",
+            format!("Year {year}: building {} clusters.", clusters.len()),
+        );
         for cluster in clusters {
             let is_misc = cluster.len() < 3;
             let proposed_name = if is_misc {
@@ -65,14 +77,28 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
                 ],
             )?;
             let group_id = conn.last_insert_rowid();
+            total_groups += 1;
+            runtime_log::info(
+                "event_grouper",
+                format!(
+                    "Created group id={group_id} year={year} name='{}' size={}.",
+                    proposed_name,
+                    cluster.len()
+                ),
+            );
             for (id, _, _, _) in cluster {
                 conn.execute(
                     "UPDATE media_items SET event_group_id=?1, status='grouped', updated_at=CURRENT_TIMESTAMP WHERE id=?2",
                     params![group_id, id],
                 )?;
+                runtime_log::info(
+                    "event_grouper",
+                    format!("Assigned media item id={id} to group id={group_id}."),
+                );
             }
         }
     }
+    runtime_log::info("event_grouper", format!("Grouping complete. total_groups={total_groups}."));
     Ok(())
 }
 

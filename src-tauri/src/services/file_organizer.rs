@@ -3,7 +3,13 @@ use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+use super::runtime_log;
+
 pub async fn finalize(conn: &Connection, base_output_dir: &str) -> Result<()> {
+    runtime_log::info(
+        "file_organizer",
+        format!("Starting finalize to output root '{}'.", base_output_dir),
+    );
     let mut stmt = conn.prepare(
         "SELECT m.id, m.filename, m.current_path, e.year, e.folder_name
          FROM media_items m
@@ -20,6 +26,7 @@ pub async fn finalize(conn: &Connection, base_output_dir: &str) -> Result<()> {
         ))
     })?;
 
+    let mut filed_count = 0_i64;
     for row in rows {
         let (id, filename, current_path, year, folder_name) = row?;
         let target_dir = PathBuf::from(base_output_dir)
@@ -40,7 +47,17 @@ pub async fn finalize(conn: &Connection, base_output_dir: &str) -> Result<()> {
             "INSERT INTO audit_log(media_item_id, action, source, new_value) VALUES(?1, 'filed', 'system', ?2)",
             params![id, final_path.to_string_lossy().to_string()],
         )?;
+        filed_count += 1;
+        runtime_log::info(
+            "file_organizer",
+            format!(
+                "Filed media id={id} filename='{}' to '{}'.",
+                filename,
+                final_path.to_string_lossy()
+            ),
+        );
     }
+    runtime_log::info("file_organizer", format!("Finalize complete. filed_count={filed_count}."));
     Ok(())
 }
 

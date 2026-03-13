@@ -5,7 +5,7 @@ use tauri::State;
 
 use crate::{
     models::{DashboardStats, DateEstimateDto},
-    services::{date_enforcer, exiftool},
+    services::{date_enforcer, exiftool, runtime_log},
     AppState,
 };
 
@@ -18,22 +18,43 @@ pub async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<Dashboard
 #[tauri::command]
 pub fn get_date_review_queue(state: State<'_, AppState>) -> Result<Vec<DateEstimateDto>, String> {
     let conn = state.open_conn().map_err(|e| e.to_string())?;
-    crate::db::get_date_review_queue(&conn).map_err(|e| e.to_string())
+    let queue = crate::db::get_date_review_queue(&conn).map_err(|e| e.to_string())?;
+    runtime_log::info(
+        "commands.metadata",
+        format!("Fetched date review queue with {} items.", queue.len()),
+    );
+    Ok(queue)
 }
 
 #[tauri::command]
 pub fn apply_date_approval(media_item_id: i64, date: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
+    runtime_log::info(
+        "commands.metadata",
+        format!(
+            "Received apply_date_approval for id={media_item_id}. mode={}.",
+            if date.is_some() { "approve" } else { "skip" }
+        ),
+    );
     tauri::async_runtime::block_on(async {
         let conn = state.open_conn().map_err(|e| e.to_string())?;
         date_enforcer::apply_date_approval(&conn, media_item_id, date)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        runtime_log::info(
+            "commands.metadata",
+            format!("apply_date_approval completed for id={media_item_id}."),
+        );
+        Ok(())
     })
 }
 
 #[tauri::command]
 pub fn get_date_media_thumbnail(media_item_id: i64, state: State<'_, AppState>) -> Result<Option<String>, String> {
     tauri::async_runtime::block_on(async {
+        runtime_log::info(
+            "commands.metadata",
+            format!("Resolving thumbnail for media item id={media_item_id}."),
+        );
         let conn = state.open_conn().map_err(|e| e.to_string())?;
         let (filename, current_path, original_path): (String, String, String) = conn
             .query_row(
@@ -44,9 +65,18 @@ pub fn get_date_media_thumbnail(media_item_id: i64, state: State<'_, AppState>) 
             .map_err(|e| e.to_string())?;
         let root_output = state.root_output();
         let resolved = resolve_media_path(&filename, &current_path, &original_path, &root_output);
-        get_date_media_thumbnail_for_path(resolved, media_item_id)
+        let result = get_date_media_thumbnail_for_path(resolved.clone(), media_item_id)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        runtime_log::info(
+            "commands.metadata",
+            format!(
+                "Thumbnail resolution for id={media_item_id} path='{}' result={}.",
+                resolved.to_string_lossy(),
+                if result.is_some() { "hit" } else { "miss" }
+            ),
+        );
+        Ok(result)
     })
 }
 
@@ -79,6 +109,13 @@ async fn get_date_media_thumbnail_for_path(
 
     for thumb in thumbnail_candidates(&current, media_item_id) {
         if let Some(url) = read_as_data_url(&thumb).await? {
+            runtime_log::info(
+                "commands.metadata",
+                format!(
+                    "Using existing thumbnail for id={media_item_id}: '{}'.",
+                    thumb.to_string_lossy()
+                ),
+            );
             return Ok(Some(url));
         }
     }
@@ -86,13 +123,34 @@ async fn get_date_media_thumbnail_for_path(
     let generated = generate_thumbnail_if_possible(&current, media_item_id).await?;
     if let Some(path) = generated {
         if let Some(url) = read_as_data_url(&path).await? {
+            runtime_log::info(
+                "commands.metadata",
+                format!(
+                    "Generated thumbnail for id={media_item_id}: '{}'.",
+                    path.to_string_lossy()
+                ),
+            );
             return Ok(Some(url));
         }
     }
 
     if is_directly_renderable_image(&current) {
+        runtime_log::info(
+            "commands.metadata",
+            format!(
+                "Falling back to directly renderable original for id={media_item_id}: '{}'.",
+                current.to_string_lossy()
+            ),
+        );
         return read_as_data_url(&current).await;
     }
+    runtime_log::warn(
+        "commands.metadata",
+        format!(
+            "No renderable thumbnail found for id={media_item_id}: '{}'.",
+            current.to_string_lossy()
+        ),
+    );
     Ok(None)
 }
 

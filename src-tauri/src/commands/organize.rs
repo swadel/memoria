@@ -2,16 +2,19 @@ use anyhow::Result;
 use rusqlite::params;
 use tauri::State;
 
-use crate::{models::EventGroupDto, services::event_grouper, services::file_organizer, AppState};
+use crate::{models::EventGroupDto, services::event_grouper, services::file_organizer, services::runtime_log, AppState};
 
 #[tauri::command]
 pub fn run_event_grouping(state: State<'_, AppState>) -> Result<(), String> {
     tauri::async_runtime::block_on(async {
+        runtime_log::info("commands.organize", "Invoked run_event_grouping.");
         let conn = state.open_conn().map_err(|e| e.to_string())?;
         let ai = state.ai_client().await;
         event_grouper::run(&conn, &ai)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        runtime_log::info("commands.organize", "run_event_grouping completed successfully.");
+        Ok(())
     })
 }
 
@@ -23,6 +26,10 @@ pub fn get_event_groups(state: State<'_, AppState>) -> Result<Vec<EventGroupDto>
 
 #[tauri::command]
 pub fn rename_event_group(group_id: i64, name: String, state: State<'_, AppState>) -> Result<(), String> {
+    runtime_log::info(
+        "commands.organize",
+        format!("Invoked rename_event_group id={group_id} new_name='{}'.", name),
+    );
     tauri::async_runtime::block_on(rename_event_group_impl(group_id, name, &state))
         .map_err(|e| e.to_string())
 }
@@ -41,6 +48,7 @@ async fn rename_event_group_impl(group_id: i64, name: String, state: &AppState) 
 #[tauri::command]
 pub fn finalize_organization(state: State<'_, AppState>) -> Result<(), String> {
     tauri::async_runtime::block_on(async {
+        runtime_log::info("commands.organize", "Invoked finalize_organization.");
         let conn = state.open_conn().map_err(|e| e.to_string())?;
         let output = state
             .default_output_dir
@@ -50,6 +58,8 @@ pub fn finalize_organization(state: State<'_, AppState>) -> Result<(), String> {
             .unwrap_or_else(|| "C:\\Memoria".to_string());
         file_organizer::finalize(&conn, &output)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        runtime_log::info("commands.organize", "finalize_organization completed successfully.");
+        Ok(())
     })
 }

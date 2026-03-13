@@ -2,15 +2,15 @@
 
 [![CI](https://github.com/swadel/memoria/actions/workflows/ci.yml/badge.svg)](https://github.com/swadel/memoria/actions/workflows/ci.yml)
 
-> Intelligently organize your iCloud photo library into a structured, event-based archive.
+> Intelligently organize local photos and videos into a structured, event-based archive.
 
-Memoria is a Windows-first desktop application that downloads photos and videos from iCloud, enforces date metadata, and organizes them into meaningful event folders — all with you in control of every decision.
+Memoria is a Windows-first desktop application that indexes local photos and videos, enforces date metadata, and organizes media into meaningful event folders — all with you in control of every decision.
 
 ---
 
 ## Why Memoria
 
-iCloud is great at storing photos. It's not great at organizing them. If you've ever tried to import your library into Amazon Photos, Lightroom, or a NAS and found thousands of screenshots mixed in with family memories, dates missing entirely, and no logical folder structure — Memoria solves that.
+Large media libraries often have inconsistent dates and no useful folder structure. Memoria gives you a deterministic, auditable pipeline for indexing, date review, grouping, and final filing.
 
 The folder structure Memoria produces looks like this:
 
@@ -32,40 +32,38 @@ The folder structure Memoria produces looks like this:
 
 ## Features
 
-### iCloud Integration
-- Authenticate with iCloud (including MFA) directly from the app
-- Specify any date range to process — month by month, year by year, or a custom window
-- Downloads original full-resolution files (not compressed versions)
-- Resumable downloads — if the app closes mid-batch, it picks up where it left off
-- Works without iCloud for Windows installed; communicates directly with Apple's web APIs
+### Local Media Indexing
+- Indexes media recursively from your configured Working Directory
+- Copies files into `/staging/` and extracts metadata (dimensions, mime, EXIF date, duration)
+- Tracks item-level status in SQLite so every stage remains auditable
+- Supports `jpeg`, `png`, `heic`, `tif`, `mp4`, and `mov` (plus common related extensions)
 
 ### Date Metadata Enforcement
 Amazon Photos, Google Photos, and most photo management tools order images by the `DateTimeOriginal` EXIF field. If that field is missing, your photos end up out of order or dumped into an "unknown date" bucket.
 
-Memoria checks every file. If a date is missing or clearly wrong (a 1970 epoch date, a future date), it:
-1. Attempts to parse the date from the filename
-2. Uses AI vision analysis to estimate when the photo was taken (analyzing clothing, vegetation, lighting, visible text, and seasonal context)
-3. Presents the estimate to you with a confidence level and reasoning
-4. Only writes the date to the file after you approve it
+Memoria checks every indexed file. If `DateTimeOriginal` is missing or invalid (for example `1970:01:01`), it:
+1. Flags the item as `date_review_pending`
+2. Uses AI to estimate a likely date with confidence/reasoning
+3. Displays the item in Date Approval with a thumbnail preview
+4. Writes approved dates back to metadata only after user action
 
 All metadata changes are logged to a full audit trail.
 
 ### Intelligent Event Grouping
 Memoria clusters your photos into events automatically:
-- Groups photos taken within a configurable time window (default: 3 days)
-- Matches clusters to known holidays and calendar events (Christmas, Thanksgiving, Fourth of July, Easter, and more)
-- Uses AI to suggest folder names for clusters it can't match to a known event (e.g., "Beach Vacation", "Thatcher's Baseball Game")
-- Presents all proposed groups for your review before moving a single file — rename, merge, split, or reassign individual items
+- Groups `date_verified` items by time proximity
+- Applies deterministic naming for misc/holiday-like groups
+- Uses AI to suggest event names for larger clusters
+- Lets you review and rename event groups before finalize
 
 Photos not associated with any event go into a `[YEAR] - Misc` folder.
 
 ### Non-Destructive by Design
-Memoria never permanently deletes anything without your explicit action:
-- Original downloaded files remain in `/staging/` untouched until you choose to clean up
-- Date metadata is written to a copy, not the original
-- The recycle folder is soft-delete only — nothing is removed from disk until you empty it
-- Every batch of filed photos can be "unfiled" — files moved back, database state reverted
-- A full audit log records every action taken by the system, AI, or you
+Memoria never hard-deletes media in the normal pipeline:
+- Indexing writes staged copies under `/staging/`
+- Finalization writes organized copies under `/organized/`
+- Reset Session can clear app state with or without deleting generated folders
+- Audit log rows capture date approvals/skips and file finalization events
 
 ---
 
@@ -75,8 +73,7 @@ Memoria never permanently deletes anything without your explicit action:
 |---|---|
 | Desktop framework | Tauri 2.0 (Rust + WebView2) |
 | Frontend | React 18 + TypeScript + Tailwind CSS + shadcn/ui |
-| iCloud access | pyicloud (Python sidecar) |
-| AI vision | OpenAI GPT-4o / GPT-4o-mini |
+| AI tasks | OpenAI/Anthropic routing for date estimation and event naming |
 | Metadata | exiftool (bundled binary) |
 | Thumbnail generation | ffmpeg (bundled binary) |
 | Database | SQLite via rusqlite (WAL mode) |
@@ -87,8 +84,8 @@ Memoria never permanently deletes anything without your explicit action:
 ## Requirements
 
 - **OS**: Windows 11 (macOS support is a planned future milestone)
-- **iCloud account**: Standard iCloud account required. **Advanced Data Protection (ADP) must be disabled** — ADP encrypts your library end-to-end in a way that prevents web-based access, which is how Memoria connects to iCloud.
-- **OpenAI API key**: Required for AI date estimation and event naming.
+- **Media source**: Local media files in the configured Working Directory.
+- **API keys**: OpenAI and/or Anthropic key for AI date estimation/event naming (optional if running fallback-only behavior).
 - **Storage**: Enough local disk space for your downloaded originals plus organized copies during processing.
 - **Tools**: Node.js 20+, Rust stable, Python 3.11+, and [Tauri prerequisites](https://tauri.app/v2/guides/getting-started/prerequisites/)
 
@@ -104,35 +101,40 @@ cd memoria
 # 2. Install frontend dependencies
 npm install
 
-# 3. Install Python sidecar dependencies
-python -m pip install -r sidecar/requirements.txt
-
-# 4. Build the Python sidecar executable
-python sidecar/build.py
-
-# 5. Place exiftool.exe and ffmpeg.exe in vendor/
+# 3. Place exiftool.exe and ffmpeg.exe in vendor/
 #    See vendor/README.md for download links
 
-# 6. Run in development mode
+# 4. Run in development mode
 npm run tauri dev
 ```
 
 ---
 
-## Pipeline Overview
+## Pipeline Phases
 
-```
-iCloud  →  /staging/  →  metadata extraction + date validation
-                        →  date approval (if needed)
-                        →  event grouping + AI naming
-                        →  /organized/<year>/<year - event>/
-```
+1. **Index Media**
+   - Recursively scans Working Directory for supported files
+   - Copies files to `/staging/`
+   - Extracts metadata and immediately runs missing-date detection
+   - Marks items as `metadata_extracted`, `date_review_pending`, or `date_verified`
 
-1. **Download** originals from iCloud into `/staging/`
-2. **Extract metadata** via exiftool (EXIF, file type, dimensions)
-3. **Date enforcement** — missing dates estimated by AI, approved by you, written to EXIF
-4. **Event grouping** — temporal clustering, holiday matching, AI-suggested folder names, your approval
-5. **File organization** — moved to `organized/<year>/<year - event>/`, logged to audit trail
+2. **Date Enforcement**
+   - Date Approval page lists `date_review_pending` items
+   - Each card loads a thumbnail (existing `.thumbnails`, generated ffmpeg thumbnail, or image fallback)
+   - `Approve/Edit` writes the selected date and sets `date_taken_source='user_override'`
+   - `Skip` clears review-required state and marks item `date_verified`
+
+3. **Group**
+   - Groups `date_verified` items into event clusters
+   - Creates event groups and links items with `status='grouped'`
+
+4. **Finalize**
+   - Copies grouped items into `/organized/<year>/<year - event>/`
+   - Updates each item to `status='filed'` and records audit events
+
+5. **Reset Session**
+   - Clears pipeline DB state
+   - Optionally deletes generated folders: `/staging`, `/organized`, `/recycle`
 
 ---
 
@@ -159,14 +161,28 @@ All settings are managed through the in-app Settings panel. Nothing requires man
 | AI cost cap | $20.00 | Processing pauses if this amount is reached |
 | Grouping time window | 3 days | Max gap between photos in the same event cluster |
 | HEIC handling | Keep originals | Whether to convert HEIC to JPEG on download |
+| Runtime logging | `info` | Set `MEMORIA_LOG_LEVEL` to `off`, `warn`, `info`, or `debug` for terminal verbosity |
+
+### Runtime Logging
+
+Memoria writes timestamped backend logs to the terminal during long-running operations (indexing, date evaluation, grouping, finalize, thumbnail resolution).
+
+Set log level before launch:
+
+```powershell
+$env:MEMORIA_LOG_LEVEL='info'   # off | warn | info | debug
+npm run tauri dev
+```
+
+You will see per-stage and per-item progress messages such as:
+- session start/completion
+- `file X/Y` indexing progress
+- date-review decisions (`flagged` vs `verified`)
+- group creation and file finalization
 
 ---
 
 ## Important Limitations
-
-**Advanced Data Protection (ADP)**: If you have ADP enabled on your iCloud account, Memoria cannot access your library. You would need to disable ADP in your Apple ID settings to use this app.
-
-**MFA re-authentication**: iCloud MFA session tokens expire approximately every 2 months. Memoria will detect this and prompt you to re-authenticate. Downloads in progress are paused and resume after you log back in.
 
 **AI costs**: AI analysis is not free. Memoria shows a cost estimate before starting any AI-powered processing step and will pause if you set a cost cap. You are billed directly by OpenAI through your own API key.
 
@@ -185,19 +201,12 @@ memoria/
   src-tauri/              # Rust backend
     src/
       commands/           # Tauri IPC command handlers
-      services/           # Business logic (download, date, organize)
+      services/           # Business logic (index, date, grouping, organize)
       db/                 # SQLite schema, migrations, queries
       models/             # Shared data structures
   src/                    # React frontend
-    components/
-      dashboard/          # Processing status overview
-      date-approval/      # Date estimation approval
-      event-review/       # Event grouping review
-      settings/           # App configuration
-  sidecar/                # Python iCloud bridge
-    icloud_bridge.py
-    requirements.txt
-    build.py              # PyInstaller build script
+    App.tsx               # Main UI (Dashboard, Date Approval, Events, Settings)
+    lib/api.ts            # Tauri invoke wrappers
   vendor/                 # Bundled third-party binaries
     exiftool.exe
     ffmpeg.exe

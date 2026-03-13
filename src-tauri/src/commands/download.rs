@@ -5,7 +5,7 @@ use tauri::State;
 
 use crate::{
     models::SessionInput,
-    services::{date_enforcer, exiftool},
+    services::{date_enforcer, exiftool, runtime_log},
     AppState,
 };
 
@@ -16,6 +16,13 @@ pub fn start_download_session(input: SessionInput, state: State<'_, AppState>) -
 }
 
 pub async fn start_download_session_impl(input: SessionInput, state: &AppState) -> Result<i64> {
+    runtime_log::info(
+        "download",
+        format!(
+            "Starting index session. working_dir='{}' output_dir='{}'",
+            input.working_directory, input.output_directory
+        ),
+    );
     let conn = state.open_conn()?;
     let working_dir = PathBuf::from(input.working_directory.trim());
     let output_dir = PathBuf::from(input.output_directory.trim());
@@ -38,8 +45,13 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
         params!["local", "local", output_dir.to_string_lossy().to_string()],
     )?;
     let session_id = conn.last_insert_rowid();
+    runtime_log::info("download", format!("Created download session id={session_id}."));
 
     let files = collect_media_files(&working_dir)?;
+    runtime_log::info(
+        "download",
+        format!("Discovered {} supported media files to index.", files.len()),
+    );
     conn.execute(
         "UPDATE download_sessions SET total_items=?1 WHERE id=?2",
         params![files.len() as i64, session_id],
@@ -55,6 +67,16 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
         let icloud_id = source_path.to_string_lossy().to_string();
         let staged_name = format!("{:05}_{}", idx + 1, filename);
         let staged_path = staging_dir.join(staged_name);
+        runtime_log::info(
+            "download",
+            format!(
+                "Indexing file {}/{}: '{}' -> '{}'",
+                idx + 1,
+                files.len(),
+                source_path.to_string_lossy(),
+                staged_path.to_string_lossy()
+            ),
+        );
         tokio::fs::copy(source_path, &staged_path).await?;
         let file_size = tokio::fs::metadata(&staged_path).await?.len() as i64;
         conn.execute(
@@ -62,7 +84,20 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
              VALUES(?1, ?2, 'downloading', '', '', ?3, ?4)",
             params![icloud_id, filename, file_size, guess_mime(source_path)],
         )?;
-        let meta = exiftool::read_metadata(staged_path.as_path()).await.unwrap_or_default();
+        let meta = match exiftool::read_metadata(staged_path.as_path()).await {
+            Ok(value) => value,
+            Err(err) => {
+                runtime_log::warn(
+                    "download",
+                    format!(
+                        "Metadata extraction failed for '{}': {}. Using defaults.",
+                        staged_path.to_string_lossy(),
+                        err
+                    ),
+                );
+                Default::default()
+            }
+        };
         conn.execute(
             "UPDATE media_items
              SET current_path=?1, original_path=?2, status='metadata_extracted', width=?3, height=?4, mime_type=COALESCE(?5, mime_type), date_taken=?6, duration_secs=?7, content_identifier=?8, date_taken_source='exif', updated_at=CURRENT_TIMESTAMP
@@ -83,14 +118,26 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
             "UPDATE download_sessions SET downloaded_count=?1 WHERE id=?2",
             params![(idx + 1) as i64, session_id],
         )?;
+        runtime_log::info(
+            "download",
+            format!(
+                "Completed file {}/{}: '{}' (size={} bytes).",
+                idx + 1,
+                files.len(),
+                filename,
+                file_size
+            ),
+        );
     }
     conn.execute(
         "UPDATE download_sessions SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?1",
         [session_id],
     )?;
+    runtime_log::info("download", format!("Session {session_id} indexing complete. Starting date evaluation."));
 
     let ai = state.ai_client().await;
     date_enforcer::evaluate(&conn, &ai).await?;
+    runtime_log::info("download", format!("Session {session_id} date evaluation complete."));
     Ok(session_id)
 }
 
