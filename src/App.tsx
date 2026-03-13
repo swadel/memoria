@@ -324,6 +324,18 @@ export function App() {
     setBusyAction("group");
     setPipelineStages((prev) => ({ ...prev, group: "running", finalize: "idle" }));
     try {
+      // If no date-verified items are available yet, run date enforcement first.
+      // This prevents entering Event Groups with zero generated groups.
+      if (stats.total > 0 && stats.dateVerified === 0) {
+        await runDateEnforcement();
+        await refreshAll();
+        const postDateStats = await getDashboardStats();
+        if (postDateStats.dateNeedsReview > 0) {
+          setMessage("Date enforcement found items requiring approval before grouping.");
+          setTab("dates");
+          return;
+        }
+      }
       await runEventGrouping();
       await refreshAll();
       setMessage("Event grouping complete.");

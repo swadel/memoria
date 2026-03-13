@@ -162,6 +162,18 @@ test.describe("Memoria browser UI", () => {
     await expect(page.getByTestId("event-groups-card")).toBeVisible();
   });
 
+  test("date to event grouping creates groups when starting empty", async ({ context }) => {
+    const groupingPage = await context.newPage();
+    await installBrowserApiMock(groupingPage, "grouping-empty");
+    await groupingPage.goto("/");
+    await groupingPage.getByTestId("tab-dates").click();
+    await expect(groupingPage.locator("[data-testid^='date-item-']")).toHaveCount(0);
+    await groupingPage.getByTestId("date-done-proceed-events").click();
+    await expect(groupingPage.getByTestId("status-pill")).toContainText("Event grouping complete.");
+    await expect(groupingPage.getByTestId("event-group-777")).toBeVisible();
+    await groupingPage.close();
+  });
+
   test("reset delete files shows loading and disables actions", async ({ page, context }) => {
     const resetPage = await context.newPage();
     await installBrowserApiMock(resetPage, "reset-slow");

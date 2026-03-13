@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "reset-error" | "reset-slow" | "ingest-slow" | "complete";
+type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "reset-error" | "reset-slow" | "ingest-slow" | "complete" | "grouping-empty";
 
 type DateEstimate = {
   mediaItemId: number;
@@ -59,8 +59,9 @@ type ImageReviewItem = {
 
 function buildState(profile: BrowserFixtureProfile) {
   const isIngestSlow = profile === "ingest-slow";
+  const isGroupingEmpty = profile === "grouping-empty";
   const dateItems: DateEstimate[] =
-    profile === "settings-only" || isIngestSlow
+    profile === "settings-only" || isIngestSlow || isGroupingEmpty
       ? []
       : [
           {
@@ -82,7 +83,7 @@ function buildState(profile: BrowserFixtureProfile) {
         ];
 
   const eventGroups: EventGroup[] =
-    profile === "settings-only" || isIngestSlow
+    profile === "settings-only" || isIngestSlow || isGroupingEmpty
       ? []
       : [
           {
@@ -96,7 +97,7 @@ function buildState(profile: BrowserFixtureProfile) {
         ];
 
   const eventGroupItemsByGroupId: Record<number, EventGroupItem[]> =
-    profile === "settings-only" || isIngestSlow
+    profile === "settings-only" || isIngestSlow || isGroupingEmpty
       ? {}
       : {
           401:
@@ -138,10 +139,10 @@ function buildState(profile: BrowserFixtureProfile) {
     indexed: 2,
     imageReview: isComplete ? 0 : 2,
     imageVerified: 4,
-    dateReview: isComplete ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
-    dateNeedsReview: isComplete ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
-    dateVerified: isComplete ? 8 : 5,
-    grouped: isComplete ? 8 : 2,
+    dateReview: isComplete || isGroupingEmpty ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
+    dateNeedsReview: isComplete || isGroupingEmpty ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
+    dateVerified: isComplete ? 8 : isGroupingEmpty ? 0 : 5,
+    grouped: isComplete ? 8 : isGroupingEmpty ? 0 : 2,
     filed: isComplete ? 8 : 1,
     imageFlaggedPending: isComplete ? 0 : 2,
     imagePhaseState: (profile === "pre-video" || isIngestSlow ? "pending" : "complete") as "pending" | "in_progress" | "complete",
@@ -149,7 +150,7 @@ function buildState(profile: BrowserFixtureProfile) {
     videoFlagged: 2,
     videoExcluded: 1,
     videoUnreviewedFlagged: 2,
-    videoPhaseState: (isComplete ? "complete" : profile === "pre-video" || isIngestSlow ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
+    videoPhaseState: (isComplete || isGroupingEmpty ? "complete" : profile === "pre-video" || isIngestSlow ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
   };
 
   const imageItems: ImageReviewItem[] = [
@@ -360,9 +361,55 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "set_anthropic_key":
             case "set_ai_task_model":
             case "run_event_grouping":
+              if (profile === "grouping-empty" && state.eventGroups.length === 0) {
+                state.eventGroups = [
+                  {
+                    id: 777,
+                    year: 2026,
+                    name: "Auto Grouped Event",
+                    folderName: "2026 - Auto Grouped Event",
+                    itemCount: 3,
+                    userApproved: false
+                  }
+                ];
+                state.eventGroupItemsByGroupId = {
+                  777: [
+                    {
+                      id: 9701,
+                      filename: "grouped_a.jpg",
+                      currentPath: "C:\\fixture\\output\\organized\\2026 - Auto Grouped Event\\grouped_a.jpg",
+                      dateTaken: "2026-03-01",
+                      mimeType: "image/jpeg",
+                      status: "grouped"
+                    },
+                    {
+                      id: 9702,
+                      filename: "grouped_b.jpg",
+                      currentPath: "C:\\fixture\\output\\organized\\2026 - Auto Grouped Event\\grouped_b.jpg",
+                      dateTaken: "2026-03-01",
+                      mimeType: "image/jpeg",
+                      status: "grouped"
+                    },
+                    {
+                      id: 9703,
+                      filename: "grouped_c.mp4",
+                      currentPath: "C:\\fixture\\output\\organized\\2026 - Auto Grouped Event\\grouped_c.mp4",
+                      dateTaken: "2026-03-01",
+                      mimeType: "video/mp4",
+                      status: "grouped"
+                    }
+                  ]
+                };
+                state.stats = { ...state.stats, grouped: 3 };
+              }
+              return Promise.resolve();
             case "finalize_organization":
             case "run_image_review_scan":
+              return Promise.resolve();
             case "run_date_enforcement":
+              if (profile === "grouping-empty") {
+                state.stats = { ...state.stats, dateVerified: 8, dateNeedsReview: 0 };
+              }
               return Promise.resolve();
             case "complete_image_review_and_start_video_review":
               state.stats.imagePhaseState = "complete";
