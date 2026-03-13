@@ -178,6 +178,8 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               });
             case "get_review_queue":
               return Promise.resolve(state.reviewItems);
+            case "get_media_preview":
+              return Promise.resolve(null);
             case "get_date_review_queue":
               return Promise.resolve(state.dateItems);
             case "get_event_groups":

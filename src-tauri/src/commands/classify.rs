@@ -1,4 +1,5 @@
 use anyhow::Result;
+use base64::Engine;
 use rusqlite::params;
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -28,6 +29,36 @@ pub fn run_classification(state: State<'_, AppState>) -> Result<(), String> {
 pub fn get_review_queue(state: State<'_, AppState>) -> Result<Vec<crate::models::MediaItemDto>, String> {
     let conn = state.open_conn().map_err(|e| e.to_string())?;
     crate::db::get_review_queue(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_media_preview(media_item_id: i64, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let conn = state.open_conn().map_err(|e| e.to_string())?;
+    let current_path: String = conn
+        .query_row(
+            "SELECT COALESCE(current_path, '') FROM media_items WHERE id=?1",
+            [media_item_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let current = PathBuf::from(current_path);
+    if current.as_os_str().is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(parent) = current.parent() {
+        let thumb = parent
+            .join(".thumbnails")
+            .join(format!("{media_item_id}.jpg"));
+        if let Some(url) = read_as_data_url(&thumb).await.map_err(|e| e.to_string())? {
+            return Ok(Some(url));
+        }
+    }
+
+    if is_image_copy_candidate(&current) {
+        return read_as_data_url(&current).await.map_err(|e| e.to_string());
+    }
+    Ok(None)
 }
 
 #[tauri::command]
@@ -234,6 +265,36 @@ fn is_image_copy_candidate(path: &Path) -> bool {
         ext.as_str(),
         "jpg" | "jpeg" | "png" | "webp" | "bmp" | "gif" | "tif" | "tiff"
     )
+}
+
+async fn read_as_data_url(path: &Path) -> Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = tokio::fs::read(path).await?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mime = mime_for_path(path);
+    Ok(Some(format!("data:{mime};base64,{encoded}")))
+}
+
+fn mime_for_path(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|x| x.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        _ => "application/octet-stream",
+    }
 }
 
 #[cfg(test)]

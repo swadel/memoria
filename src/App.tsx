@@ -11,6 +11,7 @@ import {
   getDateReviewQueue,
   getEventGroups,
   getReviewQueue,
+  getMediaPreview,
   initializeApp,
   renameEventGroup,
   runClassification,
@@ -587,37 +588,10 @@ export function App() {
                   <div className="duplicateClusterGrid">
                     {cluster.items.map((item) => (
                       <div key={item.id} className="duplicateCandidateCard" data-testid={`duplicate-item-${item.id}`}>
-                        <img
-                          className="thumbPreview"
-                          data-testid={`review-thumb-${item.id}`}
-                          src={getReviewThumbnailUrl(item, thumbVersion)}
-                          alt={item.filename}
+                        <PreviewImage
+                          item={item}
+                          thumbVersion={thumbVersion}
                           onClick={() => openLightbox(cluster.items, item)}
-                          onError={(e) => {
-                            const img = e.currentTarget as HTMLImageElement;
-                            const step = Number(img.dataset.fallbackStep ?? "0");
-                            if (step === 0) {
-                              img.dataset.fallbackStep = "1";
-                              img.src = getReviewThumbnailFileUrl(item, thumbVersion);
-                              return;
-                            }
-                            if (step === 1) {
-                              img.dataset.fallbackStep = "2";
-                              img.src = getReviewOriginalUrl(item, thumbVersion);
-                              return;
-                            }
-                            if (step === 2) {
-                              img.dataset.fallbackStep = "3";
-                              img.src = getReviewOriginalFileUrl(item, thumbVersion);
-                              return;
-                            }
-                            if (img.dataset.fallbackApplied === "1") {
-                              img.src = getThumbFallbackDataUrl(item.filename);
-                              return;
-                            }
-                            img.dataset.fallbackApplied = "1";
-                            img.src = getThumbFallbackDataUrl(item.filename);
-                          }}
                         />
                         <strong>{item.filename}</strong>
                         <div className="muted">Reason: {item.reviewReason ?? "unknown"}</div>
@@ -1061,38 +1035,7 @@ function ReviewItemCard({
 }) {
   return (
     <div className="item" data-testid={`review-item-${item.id}`}>
-      <img
-        className="thumbPreview"
-        data-testid={`review-thumb-${item.id}`}
-        src={getReviewThumbnailUrl(item, thumbVersion)}
-        alt={item.filename}
-        onClick={() => onOpenPreview(item)}
-        onError={(e) => {
-          const img = e.currentTarget as HTMLImageElement;
-          const step = Number(img.dataset.fallbackStep ?? "0");
-          if (step === 0) {
-            img.dataset.fallbackStep = "1";
-            img.src = getReviewThumbnailFileUrl(item, thumbVersion);
-            return;
-          }
-          if (step === 1) {
-            img.dataset.fallbackStep = "2";
-            img.src = getReviewOriginalUrl(item, thumbVersion);
-            return;
-          }
-          if (step === 2) {
-            img.dataset.fallbackStep = "3";
-            img.src = getReviewOriginalFileUrl(item, thumbVersion);
-            return;
-          }
-          if (img.dataset.fallbackApplied === "1") {
-            img.src = getThumbFallbackDataUrl(item.filename);
-            return;
-          }
-          img.dataset.fallbackApplied = "1";
-          img.src = getThumbFallbackDataUrl(item.filename);
-        }}
-      />
+      <PreviewImage item={item} thumbVersion={thumbVersion} onClick={() => onOpenPreview(item)} />
       <label className="row" htmlFor={`review-select-${item.id}`}>
         <input
           id={`review-select-${item.id}`}
@@ -1131,6 +1074,58 @@ function getReviewThumbnailUrl(item: MediaItem, version: number): string {
   const dir = p.slice(0, idx);
   const thumb = `${dir}${sep}.thumbnails${sep}${item.id}.jpg`;
   return withCacheBust(safeConvertFileSrc(thumb), version);
+}
+
+function PreviewImage({ item, thumbVersion, onClick }: { item: MediaItem; thumbVersion: number; onClick: () => void }) {
+  const [src, setSrc] = useState<string>(() => getReviewThumbnailUrl(item, thumbVersion));
+
+  useEffect(() => {
+    let cancelled = false;
+    setSrc(getReviewThumbnailUrl(item, thumbVersion));
+    if ((window as Window).__MEMORIA_TEST_API__) {
+      return;
+    }
+    getMediaPreview(item.id)
+      .then((dataUrl) => {
+        if (!cancelled && dataUrl) {
+          setSrc(dataUrl);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [item.id, item.currentPath, thumbVersion]);
+
+  return (
+    <img
+      className="thumbPreview"
+      data-testid={`review-thumb-${item.id}`}
+      src={src}
+      alt={item.filename}
+      onClick={onClick}
+      onError={(e) => {
+        const img = e.currentTarget as HTMLImageElement;
+        const step = Number(img.dataset.fallbackStep ?? "0");
+        if (step === 0) {
+          img.dataset.fallbackStep = "1";
+          img.src = getReviewThumbnailFileUrl(item, thumbVersion);
+          return;
+        }
+        if (step === 1) {
+          img.dataset.fallbackStep = "2";
+          img.src = getReviewOriginalUrl(item, thumbVersion);
+          return;
+        }
+        if (step === 2) {
+          img.dataset.fallbackStep = "3";
+          img.src = getReviewOriginalFileUrl(item, thumbVersion);
+          return;
+        }
+        img.src = getThumbFallbackDataUrl(item.filename);
+      }}
+    />
+  );
 }
 
 function getReviewThumbnailFileUrl(item: MediaItem, version: number): string {
