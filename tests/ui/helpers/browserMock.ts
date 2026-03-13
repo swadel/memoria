@@ -361,7 +361,7 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "set_anthropic_key":
             case "set_ai_task_model":
             case "run_event_grouping":
-              if (profile === "grouping-empty" && state.eventGroups.length === 0) {
+              if (fixtureProfile === "grouping-empty" && state.eventGroups.length === 0) {
                 state.eventGroups = [
                   {
                     id: 777,
@@ -407,7 +407,7 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "run_image_review_scan":
               return Promise.resolve();
             case "run_date_enforcement":
-              if (profile === "grouping-empty") {
+              if (fixtureProfile === "grouping-empty") {
                 state.stats = { ...state.stats, dateVerified: 8, dateNeedsReview: 0 };
               }
               return Promise.resolve();
