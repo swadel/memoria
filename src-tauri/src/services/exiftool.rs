@@ -139,6 +139,10 @@ pub async fn create_thumbnail_ffmpeg(input: &Path, output_jpg: &Path) -> Result<
         .arg(input)
         .arg("-vf")
         .arg("scale='min(1024,iw)':-1")
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-update")
+        .arg("1")
         .arg(output_jpg)
         .status()
         .await?;

@@ -1095,10 +1095,10 @@ function getReviewOriginalUrl(item: MediaItem): string {
 }
 
 function safeConvertFileSrc(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
   try {
-    return convertFileSrc(path);
+    return convertFileSrc(normalized);
   } catch {
-    const normalized = path.replace(/\\/g, "/");
     return /^[a-zA-Z]:\//.test(normalized) ? `file:///${normalized}` : `file://${normalized}`;
   }
 }
