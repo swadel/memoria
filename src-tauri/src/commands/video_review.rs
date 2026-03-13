@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tauri::State;
 
-use crate::{models::VideoReviewItemDto, services::{event_grouper, runtime_log, video_review}, AppState};
+use crate::{models::VideoReviewItemDto, services::{runtime_log, video_review}, AppState};
 
 #[tauri::command]
 pub fn get_video_review_items(include_excluded: bool, state: State<'_, AppState>) -> Result<Vec<VideoReviewItemDto>, String> {
@@ -36,20 +36,35 @@ pub fn restore_media_item(media_item_id: i64, state: State<'_, AppState>) -> Res
 #[tauri::command]
 pub fn exclude_media_items(media_item_ids: Vec<i64>, state: State<'_, AppState>) -> Result<usize, String> {
     let mut conn = state.open_conn().map_err(|e| e.to_string())?;
-    video_review::exclude_media_items(&mut conn, &state.root_output(), &media_item_ids, &["date_verified", "grouped"])
+    video_review::exclude_media_items(
+        &mut conn,
+        &state.root_output(),
+        &media_item_ids,
+        &["indexed", "image_reviewed", "video_reviewed", "date_verified", "grouped"],
+    )
         .map_err(|e| e.to_string())
 }
 
 fn exclude_media_item_impl(media_item_id: i64, state: &AppState) -> Result<()> {
     let mut conn = state.open_conn()?;
-    video_review::exclude_media_items(&mut conn, &state.root_output(), &[media_item_id], &["date_verified", "grouped"])?;
+    video_review::exclude_media_items(
+        &mut conn,
+        &state.root_output(),
+        &[media_item_id],
+        &["indexed", "image_reviewed", "video_reviewed", "date_verified", "grouped"],
+    )?;
     Ok(())
 }
 
 fn restore_media_item_impl(media_item_id: i64, state: &AppState) -> Result<()> {
     let mut conn = state.open_conn()?;
     let restore_status = conn.query_row(
-        "SELECT CASE WHEN event_group_id IS NULL THEN 'date_verified' ELSE 'grouped' END FROM media_items WHERE id=?1",
+        "SELECT CASE
+            WHEN event_group_id IS NOT NULL THEN 'grouped'
+            WHEN mime_type LIKE 'video/%' THEN 'image_reviewed'
+            ELSE 'indexed'
+         END
+         FROM media_items WHERE id=?1",
         [media_item_id],
         |r| r.get::<_, String>(0),
     )?;
@@ -65,8 +80,6 @@ pub fn complete_video_review_and_run_grouping(state: State<'_, AppState>) -> Res
 pub async fn complete_video_review_and_run_grouping_impl(state: &AppState) -> Result<()> {
     let conn = state.open_conn()?;
     video_review::complete_video_review(&conn)?;
-    let ai = state.ai_client().await;
-    event_grouper::run(&conn, &ai).await?;
     Ok(())
 }
 

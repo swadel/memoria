@@ -5,7 +5,7 @@ use tauri::State;
 
 use crate::{
     models::{DashboardStats, DateEstimateDto},
-    services::{date_enforcer, exiftool, runtime_log, video_review},
+    services::{date_enforcer, exiftool, runtime_log},
     AppState,
 };
 
@@ -40,14 +40,22 @@ pub fn apply_date_approval(media_item_id: i64, date: Option<String>, state: Stat
         date_enforcer::apply_date_approval(&conn, media_item_id, date)
             .await
             .map_err(|e| e.to_string())?;
-        video_review::prepare_video_review(&conn, &state.root_output())
-            .await
-            .map_err(|e| e.to_string())?;
         runtime_log::info(
             "commands.metadata",
             format!("apply_date_approval completed for id={media_item_id}."),
         );
         Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn run_date_enforcement(state: State<'_, AppState>) -> Result<(), String> {
+    tauri::async_runtime::block_on(async {
+        let conn = state.open_conn().map_err(|e| e.to_string())?;
+        let ai = state.ai_client().await;
+        date_enforcer::evaluate(&conn, &ai)
+            .await
+            .map_err(|e| e.to_string())
     })
 }
 
@@ -295,7 +303,7 @@ mod tests {
 
         conn.execute(
             "INSERT INTO media_items(icloud_id, filename, current_path, status, date_needs_review)
-             VALUES(?1, ?2, ?3, 'date_review_pending', 1)",
+             VALUES(?1, ?2, ?3, 'image_reviewed', 1)",
             params!["thumb-1", "sample.png", media_path.to_string_lossy().to_string()],
         )
         .expect("insert media");

@@ -2,10 +2,13 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
 
-use crate::models::{DashboardStats, DateEstimateDto, EventGroupDto, EventGroupItemDto, VideoReviewItemDto};
+use crate::models::{
+    DashboardStats, DateEstimateDto, EventGroupDto, EventGroupItemDto, ImageReviewItemDto, VideoReviewItemDto,
+};
 
 const DEFAULT_VIDEO_FLAG_SIZE_BYTES: i64 = 5 * 1024 * 1024;
 const DEFAULT_VIDEO_FLAG_DURATION_SECS: f64 = 10.0;
+const IMAGE_PHASE_STATE_KEY: &str = "image_review_phase_state";
 const VIDEO_PHASE_STATE_KEY: &str = "video_review_phase_state";
 
 pub fn init_db(path: &Path) -> Result<Connection> {
@@ -34,7 +37,7 @@ CREATE TABLE IF NOT EXISTS media_items (
     ai_date_estimate_raw TEXT,
     content_identifier  TEXT,
     status              TEXT NOT NULL DEFAULT 'queued'
-                        CHECK (status IN ('queued','downloading','downloaded','metadata_extracted','date_review_pending','date_verified','excluded','grouped','filed','error')),
+                        CHECK (status IN ('queued','indexed','image_reviewed','video_reviewed','date_verified','grouped','filed','excluded')),
     error_message       TEXT,
     event_group_id      INTEGER REFERENCES event_groups(id),
     created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -93,6 +96,22 @@ CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
     ensure_column(&conn, "media_items", "video_width", "INTEGER")?;
     ensure_column(&conn, "media_items", "video_height", "INTEGER")?;
     ensure_column(&conn, "media_items", "video_codec", "TEXT")?;
+    ensure_column(&conn, "media_items", "burst_group_id", "TEXT")?;
+    ensure_column(&conn, "media_items", "is_burst_primary", "INTEGER DEFAULT 0")?;
+    ensure_column(&conn, "media_items", "image_flags", "TEXT")?;
+    ensure_column(&conn, "media_items", "sharpness_score", "REAL")?;
+    ensure_media_items_status_migration(&conn)?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_burst_group_id ON media_items(burst_group_id)",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE media_items
+         SET status='image_reviewed'
+         WHERE status='indexed'
+           AND (image_flags IS NULL OR image_flags='' OR image_flags='[]')",
+        [],
+    )?;
     if column_exists(&conn, "media_items", "ai_classification_raw")? {
         conn.execute(
             "UPDATE media_items
@@ -107,13 +126,23 @@ CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
 
 pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     let total: i64 = conn.query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0))?;
-    let downloading: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status='downloading'",
+    let indexed: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM media_items WHERE status='indexed'",
         [],
         |r| r.get(0),
     )?;
-    let indexed: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status IN ('downloaded', 'metadata_extracted')",
+    let image_review: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM media_items WHERE status='indexed' AND COALESCE(image_flags, '') != '' AND COALESCE(image_flags, '[]') != '[]'",
+        [],
+        |r| r.get(0),
+    )?;
+    let image_verified: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM media_items WHERE status='image_reviewed'",
+        [],
+        |r| r.get(0),
+    )?;
+    let date_review: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM media_items WHERE status='image_reviewed' AND date_needs_review=1",
         [],
         |r| r.get(0),
     )?;
@@ -137,21 +166,19 @@ pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         [],
         |r| r.get(0),
     )?;
-    let errors: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status='error'",
-        [],
-        |r| r.get(0),
-    )?;
+    let image_flagged_pending: i64 = image_review;
+    let image_phase_state = get_setting(conn, IMAGE_PHASE_STATE_KEY)?
+        .unwrap_or_else(|| "pending".to_string());
     let video_total: i64 = conn.query_row(
         "SELECT COUNT(*) FROM media_items
-         WHERE mime_type LIKE 'video/%' AND status IN ('date_verified', 'excluded', 'grouped', 'filed')",
+         WHERE mime_type LIKE 'video/%' AND status IN ('image_reviewed', 'video_reviewed', 'date_verified', 'excluded', 'grouped', 'filed')",
         [],
         |r| r.get(0),
     )?;
     let video_flagged: i64 = conn.query_row(
         "SELECT COUNT(*) FROM media_items
          WHERE mime_type LIKE 'video/%'
-           AND status='date_verified'
+           AND status='image_reviewed'
            AND (COALESCE(file_size, 0) <= ?1 OR COALESCE(duration_secs, 0.0) <= ?2)",
         rusqlite::params![DEFAULT_VIDEO_FLAG_SIZE_BYTES, DEFAULT_VIDEO_FLAG_DURATION_SECS],
         |r| r.get(0),
@@ -167,13 +194,16 @@ pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
 
     Ok(DashboardStats {
         total,
-        downloading,
         indexed,
+        image_review,
+        image_verified,
+        date_review,
         date_needs_review,
         date_verified,
         grouped,
         filed,
-        errors,
+        image_flagged_pending,
+        image_phase_state,
         video_total,
         video_flagged,
         video_excluded,
@@ -259,9 +289,9 @@ pub fn get_event_group_items(conn: &Connection, group_id: i64, show_excluded: bo
 
 pub fn get_video_review_items(conn: &Connection, include_excluded: bool) -> Result<Vec<VideoReviewItemDto>> {
     let status_clause = if include_excluded {
-        "status IN ('date_verified', 'excluded')"
+        "status IN ('image_reviewed', 'excluded')"
     } else {
-        "status='date_verified'"
+        "status='image_reviewed'"
     };
     let sql = format!(
         "SELECT id, filename, COALESCE(current_path, ''), date_taken, COALESCE(mime_type, ''), COALESCE(file_size, 0), COALESCE(duration_secs, 0.0), video_width, video_height, video_codec, status
@@ -282,6 +312,42 @@ pub fn get_video_review_items(conn: &Connection, include_excluded: bool) -> Resu
             video_width: row.get(7)?,
             video_height: row.get(8)?,
             video_codec: row.get(9)?,
+            status: row.get(10)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn get_image_review_items(conn: &Connection, include_excluded: bool) -> Result<Vec<ImageReviewItemDto>> {
+    let status_clause = if include_excluded {
+        "status IN ('indexed', 'image_reviewed', 'excluded')"
+    } else {
+        "status IN ('indexed', 'image_reviewed')"
+    };
+    let sql = format!(
+        "SELECT id, filename, COALESCE(current_path, ''), date_taken, COALESCE(mime_type, ''), COALESCE(file_size, 0), sharpness_score, burst_group_id, COALESCE(is_burst_primary, 0), image_flags, status
+         FROM media_items
+         WHERE mime_type LIKE 'image/%' AND {status_clause}
+         ORDER BY date_taken ASC, id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        let flags_raw: Option<String> = row.get(9)?;
+        let flags: Vec<String> = flags_raw
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+            .unwrap_or_default();
+        Ok(ImageReviewItemDto {
+            id: row.get(0)?,
+            filename: row.get(1)?,
+            current_path: row.get(2)?,
+            date_taken: row.get(3)?,
+            mime_type: row.get(4)?,
+            file_size_bytes: row.get(5)?,
+            sharpness_score: row.get(6)?,
+            burst_group_id: row.get(7)?,
+            is_burst_primary: row.get::<_, i64>(8)? == 1,
+            image_flags: flags,
             status: row.get(10)?,
         })
     })?;
@@ -373,6 +439,87 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     Ok(false)
 }
 
+fn ensure_media_items_status_migration(conn: &Connection) -> Result<()> {
+    let schema: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='media_items'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(schema) = schema else {
+        return Ok(());
+    };
+    if schema.contains("image_reviewed") && schema.contains("video_reviewed") {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+BEGIN IMMEDIATE;
+ALTER TABLE media_items RENAME TO media_items_old;
+CREATE TABLE media_items (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    icloud_id           TEXT UNIQUE,
+    filename            TEXT NOT NULL,
+    original_path       TEXT,
+    current_path        TEXT,
+    final_path          TEXT,
+    file_size           INTEGER,
+    mime_type           TEXT,
+    width               INTEGER,
+    height              INTEGER,
+    duration_secs       REAL,
+    date_taken          TEXT,
+    date_taken_source   TEXT,
+    date_taken_confidence REAL,
+    date_needs_review   INTEGER DEFAULT 0,
+    ai_date_estimate_raw TEXT,
+    content_identifier  TEXT,
+    status              TEXT NOT NULL DEFAULT 'queued'
+                        CHECK (status IN ('queued','indexed','image_reviewed','video_reviewed','date_verified','grouped','filed','excluded')),
+    error_message       TEXT,
+    event_group_id      INTEGER REFERENCES event_groups(id),
+    burst_group_id      TEXT,
+    is_burst_primary    INTEGER DEFAULT 0,
+    image_flags         TEXT,
+    sharpness_score     REAL,
+    video_width         INTEGER,
+    video_height        INTEGER,
+    video_codec         TEXT,
+    created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO media_items(
+    id, icloud_id, filename, original_path, current_path, final_path, file_size, mime_type, width, height,
+    duration_secs, date_taken, date_taken_source, date_taken_confidence, date_needs_review, ai_date_estimate_raw,
+    content_identifier, status, error_message, event_group_id, burst_group_id, is_burst_primary, image_flags, sharpness_score,
+    video_width, video_height, video_codec, created_at, updated_at
+)
+SELECT
+    id, icloud_id, filename, original_path, current_path, final_path, file_size, mime_type, width, height,
+    duration_secs, date_taken, date_taken_source, date_taken_confidence, date_needs_review, ai_date_estimate_raw,
+    content_identifier,
+    CASE
+      WHEN status IN ('queued','indexed','image_reviewed','video_reviewed','date_verified','grouped','filed','excluded') THEN status
+      WHEN status IN ('downloading','downloaded','metadata_extracted','date_review_pending','error') THEN 'indexed'
+      ELSE 'queued'
+    END,
+    error_message, event_group_id,
+    COALESCE(burst_group_id, NULL), COALESCE(is_burst_primary, 0), COALESCE(image_flags, NULL), COALESCE(sharpness_score, NULL),
+    COALESCE(video_width, NULL), COALESCE(video_height, NULL), COALESCE(video_codec, NULL), created_at, updated_at
+FROM media_items_old;
+DROP TABLE media_items_old;
+CREATE INDEX IF NOT EXISTS idx_media_status ON media_items(status);
+CREATE INDEX IF NOT EXISTS idx_media_date_review ON media_items(date_needs_review);
+CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
+CREATE INDEX IF NOT EXISTS idx_media_burst_group_id ON media_items(burst_group_id);
+COMMIT;
+        "#,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,7 +561,7 @@ mod tests {
 
         conn.execute(
             "INSERT INTO media_items(icloud_id, filename, current_path, status, date_needs_review, ai_date_estimate_raw)
-             VALUES(?1, ?2, ?3, 'date_review_pending', 1, ?4)",
+             VALUES(?1, ?2, ?3, 'image_reviewed', 1, ?4)",
             [
                 "d1",
                 "IMG_DATE.JPG",

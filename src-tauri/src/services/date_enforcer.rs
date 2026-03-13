@@ -14,7 +14,7 @@ pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT id, filename, COALESCE(current_path, ''), date_taken
          FROM media_items
-         WHERE status IN ('downloaded', 'metadata_extracted', 'date_review_pending', 'date_verified')
+         WHERE status='video_reviewed'
            AND COALESCE(current_path, '') != ''",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -54,7 +54,7 @@ pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
             .to_string();
             conn.execute(
                 "UPDATE media_items
-                 SET date_needs_review=1, ai_date_estimate_raw=?1, status='date_review_pending', updated_at=CURRENT_TIMESTAMP
+                 SET date_needs_review=1, ai_date_estimate_raw=?1, status='image_reviewed', updated_at=CURRENT_TIMESTAMP
                  WHERE id=?2",
                 params![raw, id],
             )?;
@@ -168,13 +168,13 @@ mod tests {
 
         conn.execute(
             "INSERT INTO media_items(icloud_id, filename, current_path, status, date_taken)
-             VALUES(?1, ?2, ?3, 'metadata_extracted', ?4)",
+             VALUES(?1, ?2, ?3, 'video_reviewed', ?4)",
             params!["ok-1", "IMG_OK.JPG", "C:\\tmp\\IMG_OK.JPG", "2026-03-12"],
         )
         .expect("insert valid date item");
         conn.execute(
             "INSERT INTO media_items(icloud_id, filename, current_path, status, date_taken)
-             VALUES(?1, ?2, ?3, 'metadata_extracted', NULL)",
+             VALUES(?1, ?2, ?3, 'video_reviewed', NULL)",
             params!["miss-1", "IMG_MISSING.JPG", "C:\\tmp\\IMG_MISSING.JPG"],
         )
         .expect("insert missing date item");
@@ -196,7 +196,7 @@ mod tests {
             )
             .expect("missing flag");
         assert_eq!(valid_status, "date_verified");
-        assert_eq!(missing_status, "date_review_pending");
+        assert_eq!(missing_status, "image_reviewed");
         assert_eq!(missing_flag, 1);
 
         drop(conn);
@@ -209,7 +209,7 @@ mod tests {
         let conn = init_db(&db_path).expect("init db");
         conn.execute(
             "INSERT INTO media_items(icloud_id, filename, current_path, status, date_needs_review)
-             VALUES(?1, ?2, ?3, 'date_review_pending', 1)",
+             VALUES(?1, ?2, ?3, 'image_reviewed', 1)",
             params!["skip-1", "IMG_SKIP.JPG", "C:\\tmp\\IMG_SKIP.JPG"],
         )
         .expect("insert skip row");
@@ -239,7 +239,7 @@ mod tests {
         let conn = init_db(&db_path).expect("init db");
         conn.execute(
             "INSERT INTO media_items(icloud_id, filename, current_path, status, date_needs_review)
-             VALUES(?1, ?2, ?3, 'date_review_pending', 1)",
+             VALUES(?1, ?2, ?3, 'image_reviewed', 1)",
             params!["approve-1", "IMG_APPROVE.JPG", "C:\\tmp\\IMG_APPROVE.JPG"],
         )
         .expect("insert approve row");

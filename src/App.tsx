@@ -2,6 +2,7 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   applyDateApproval,
+  completeImageReviewAndStartVideoReview,
   completeVideoReviewAndRunGrouping,
   createEventGroup,
   createEventGroupAndMove,
@@ -17,14 +18,19 @@ import {
   getEventGroupItems,
   getEventGroupMediaPreview,
   getEventGroups,
+  getImageReviewItems,
   getToolHealth,
   getVideoReviewItems,
   initializeApp,
   moveEventGroupItems,
   renameEventGroup,
   runEventGrouping,
+  runDateEnforcement,
+  runImageReviewScan,
   restoreVideos,
   restoreMediaItem,
+  keepAllBurst,
+  keepBestOnly,
   setAiTaskModel,
   setAnthropicKey,
   setOpenAiKey,
@@ -46,21 +52,24 @@ import {
   calculateEmptySlotsInRow,
   calculateRowCount
 } from "./lib/responsiveGrid";
-import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, VideoReviewItem } from "./types";
+import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, ImageReviewItem, VideoReviewItem } from "./types";
 
-type Tab = "dashboard" | "dates" | "videos" | "events" | "settings";
-type PipelineStage = "index" | "date" | "video" | "group" | "finalize";
+type Tab = "dashboard" | "images" | "videos" | "dates" | "events" | "settings";
+type PipelineStage = "index" | "image" | "video" | "date" | "group" | "finalize";
 type PipelineStageState = "idle" | "running" | "completed" | "failed";
 
 const DEFAULT_STATS: DashboardStats = {
   total: 0,
-  downloading: 0,
   indexed: 0,
+  imageReview: 0,
+  imageVerified: 0,
+  dateReview: 0,
   dateNeedsReview: 0,
   dateVerified: 0,
   grouped: 0,
   filed: 0,
-  errors: 0,
+  imageFlaggedPending: 0,
+  imagePhaseState: "pending",
   videoTotal: 0,
   videoFlagged: 0,
   videoExcluded: 0,
@@ -72,28 +81,16 @@ const POLL_INTERVAL_MS = Number(import.meta.env.VITE_REFRESH_INTERVAL_MS ?? "300
 const DISABLE_UI_POLLING = import.meta.env.VITE_E2E_DISABLE_POLLING === "1";
 
 function derivePipelineStages(stats: DashboardStats): Record<PipelineStage, PipelineStageState> {
-  const dateCompleted =
-    stats.total > 0 && stats.dateNeedsReview === 0 && (stats.dateVerified > 0 || stats.videoTotal > 0 || stats.grouped > 0 || stats.filed > 0);
-  const videoCompleted = stats.videoPhaseState === "complete" || (stats.videoTotal === 0 && dateCompleted);
+  const indexCompleted = stats.total > 0;
+  const imageCompleted = stats.imagePhaseState === "complete" || (indexCompleted && stats.imageReview === 0);
+  const videoCompleted = stats.videoPhaseState === "complete" || (imageCompleted && stats.videoTotal === 0);
+  const dateCompleted = videoCompleted && stats.dateNeedsReview === 0;
   return {
-    index: stats.total > 0 ? "completed" : "idle",
-    date:
-      stats.total === 0
-        ? "idle"
-        : stats.dateNeedsReview > 0
-          ? "running"
-          : stats.dateVerified > 0 || stats.grouped > 0 || stats.filed > 0
-            ? "completed"
-            : "idle",
-    video:
-      !dateCompleted
-        ? "idle"
-        : videoCompleted
-          ? "completed"
-          : stats.videoTotal > 0
-            ? "running"
-            : "idle",
-    group: stats.grouped > 0 || stats.filed > 0 ? "completed" : videoCompleted ? "idle" : "idle",
+    index: indexCompleted ? "completed" : "idle",
+    image: !indexCompleted ? "idle" : imageCompleted ? "completed" : "running",
+    video: !imageCompleted ? "idle" : videoCompleted ? "completed" : "running",
+    date: !videoCompleted ? "idle" : dateCompleted ? "completed" : "running",
+    group: stats.grouped > 0 || stats.filed > 0 ? "completed" : dateCompleted ? "idle" : "idle",
     finalize: stats.filed > 0 ? "completed" : "idle"
   };
 }
@@ -103,6 +100,8 @@ export function App() {
   const [stats, setStats] = useState<DashboardStats>(DEFAULT_STATS);
   const [dateItems, setDateItems] = useState<DateEstimate[]>([]);
   const [groups, setGroups] = useState<EventGroup[]>([]);
+  const [imageItems, setImageItems] = useState<ImageReviewItem[]>([]);
+  const [showExcludedImages, setShowExcludedImages] = useState(false);
   const [videoItems, setVideoItems] = useState<VideoReviewItem[]>([]);
   const [showExcludedVideos, setShowExcludedVideos] = useState(false);
   const [message, setMessage] = useState<string>("");
@@ -137,20 +136,23 @@ export function App() {
   );
 
   async function refreshAll() {
-    const [nextStats, nextDateItems, nextGroups, nextVideoItems] = await Promise.all([
+    const [nextStats, nextDateItems, nextGroups, nextImageItems, nextVideoItems] = await Promise.all([
       getDashboardStats(),
       getDateReviewQueue(),
       getEventGroups(),
+      getImageReviewItems(showExcludedImages),
       getVideoReviewItems(showExcludedVideos)
     ]);
     setStats(nextStats);
     setDateItems(nextDateItems);
     setGroups(nextGroups);
+    setImageItems(nextImageItems);
     setVideoItems(nextVideoItems);
     setPipelineStages((prev) => {
       const derived = derivePipelineStages(nextStats);
       return {
         index: prev.index === "failed" ? "failed" : derived.index,
+        image: prev.image === "failed" ? "failed" : derived.image,
         date: prev.date === "failed" ? "failed" : derived.date,
         video: prev.video === "failed" ? "failed" : derived.video,
         group: prev.group === "failed" ? "failed" : derived.group,
@@ -191,15 +193,15 @@ export function App() {
 
   useEffect(() => {
     refreshAll().catch(() => undefined);
-  }, [showExcludedVideos]);
+  }, [showExcludedVideos, showExcludedImages]);
 
   async function onStart() {
     setBusyAction("ingest");
-    setPipelineStages((prev) => ({ ...prev, index: "running", date: "idle", video: "idle", group: "idle", finalize: "idle" }));
+    setPipelineStages((prev) => ({ ...prev, index: "running", image: "idle", video: "idle", date: "idle", group: "idle", finalize: "idle" }));
     try {
       await startDownloadSession({ workingDirectory, outputDirectory });
       await refreshAll();
-      setMessage("Media indexed with metadata extraction and date validation.");
+      setMessage("Media indexed. Run Image Review next.");
       setTab("dashboard");
     } catch (err) {
       setMessage(`Indexing failed: ${String(err)}`);
@@ -219,6 +221,34 @@ export function App() {
     } catch (err) {
       setMessage(`Grouping failed: ${String(err)}`);
       setPipelineStages((prev) => ({ ...prev, group: "failed" }));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function onRunImageReviewScan() {
+    setBusyAction("image-review-scan");
+    try {
+      await runImageReviewScan();
+      await refreshAll();
+      setTab("images");
+      setMessage("Image review scan complete.");
+    } catch (err) {
+      setMessage(`Image review scan failed: ${String(err)}`);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function onRunDateEnforcement() {
+    setBusyAction("date-enforcement");
+    try {
+      await runDateEnforcement();
+      await refreshAll();
+      setTab("dates");
+      setMessage("Date enforcement complete. Review pending items if any.");
+    } catch (err) {
+      setMessage(`Date enforcement failed: ${String(err)}`);
     } finally {
       setBusyAction(null);
     }
@@ -257,8 +287,16 @@ export function App() {
     }
   }
 
+  const imagePhaseLabel = useMemo(
+    () => (stats.imageReview > 0 ? `2) Image Review (${stats.imageReview} flagged)` : "2) Image Review"),
+    [stats.imageReview]
+  );
+  const videoPhaseLabel = useMemo(
+    () => (stats.videoFlagged > 0 ? `3) Video Review (${stats.videoFlagged} flagged)` : "3) Video Review"),
+    [stats.videoFlagged]
+  );
   const datePhaseLabel = useMemo(
-    () => (stats.dateNeedsReview > 0 ? `2) Date Enforcement (${stats.dateNeedsReview} pending)` : "2) Date Enforcement"),
+    () => (stats.dateNeedsReview > 0 ? `4) Date Enforcement (${stats.dateNeedsReview} pending)` : "4) Date Enforcement"),
     [stats.dateNeedsReview]
   );
 
@@ -397,22 +435,35 @@ export function App() {
         <button data-testid="tab-dashboard" className={tab === "dashboard" ? "tab active" : "tab"} onClick={() => setTab("dashboard")}>
           Dashboard
         </button>
-        <button data-testid="tab-dates" className={tab === "dates" ? "tab active" : "tab"} onClick={() => setTab("dates")}>
-          Date Approval
+        <button
+          data-testid="tab-images"
+          className={tab === "images" ? "tab active" : "tab"}
+          onClick={() => setTab("images")}
+          disabled={stats.total === 0}
+        >
+          Image Review {stats.imageFlaggedPending > 0 ? `(${stats.imageFlaggedPending})` : ""}
         </button>
         <button
           data-testid="tab-videos"
           className={tab === "videos" ? "tab active" : "tab"}
           onClick={() => setTab("videos")}
-          disabled={stats.videoPhaseState === "pending" && stats.dateNeedsReview > 0}
+          disabled={stats.imagePhaseState !== "complete"}
         >
           Video Review {stats.videoUnreviewedFlagged > 0 ? `(${stats.videoUnreviewedFlagged})` : ""}
+        </button>
+        <button
+          data-testid="tab-dates"
+          className={tab === "dates" ? "tab active" : "tab"}
+          onClick={() => setTab("dates")}
+          disabled={stats.videoPhaseState !== "complete"}
+        >
+          Date Approval
         </button>
         <button
           data-testid="tab-events"
           className={tab === "events" ? "tab active" : "tab"}
           onClick={() => setTab("events")}
-          disabled={stats.videoTotal > 0 && stats.videoPhaseState !== "complete"}
+          disabled={stats.dateNeedsReview > 0 || stats.videoPhaseState !== "complete"}
         >
           Event Groups
         </button>
@@ -426,11 +477,12 @@ export function App() {
           <div className="statsGrid" data-testid="dashboard-stats-grid">
             <StatCard label="Total" value={stats.total} testId="stat-total" />
             <StatCard label="Indexed" value={stats.indexed} testId="stat-indexed" />
-            <StatCard label="Date Review" value={stats.dateNeedsReview} testId="stat-date-review" />
+            <StatCard label="Image Review" value={stats.imageReview} testId="stat-image-review" />
+            <StatCard label="Image Verified" value={stats.imageVerified} testId="stat-image-verified" />
+            <StatCard label="Date Review" value={stats.dateReview} testId="stat-date-review" />
             <StatCard label="Date Verified" value={stats.dateVerified} testId="stat-date-verified" />
             <StatCard label="Grouped" value={stats.grouped} testId="stat-grouped" />
             <StatCard label="Filed" value={stats.filed} testId="stat-filed" />
-            <StatCard label="Errors" value={stats.errors} danger={stats.errors > 0} testId="stat-errors" />
           </div>
 
           <div className="card" data-testid="dashboard-pipeline-card">
@@ -445,28 +497,36 @@ export function App() {
                 {busyAction === "ingest" ? "Indexing..." : "1) Index Media"}
               </button>
               <button
-                data-testid="pipeline-date-enforcement"
-                className={pipelineButtonClass(pipelineStages.date)}
-                disabled={busyAction !== null}
-                onClick={() => setTab("dates")}
+                data-testid="pipeline-image-review"
+                className={pipelineButtonClass(pipelineStages.image)}
+                disabled={busyAction !== null || stats.total === 0}
+                onClick={onRunImageReviewScan}
               >
-                {datePhaseLabel}
+                {busyAction === "image-review-scan" ? "Scanning..." : imagePhaseLabel}
               </button>
               <button
                 data-testid="pipeline-video-review"
                 className={pipelineButtonClass(pipelineStages.video)}
-                disabled={busyAction !== null || stats.dateNeedsReview > 0}
+                disabled={busyAction !== null || stats.imagePhaseState !== "complete"}
                 onClick={() => setTab("videos")}
               >
-                3) Video Review ({stats.videoTotal} total, {stats.videoFlagged} flagged)
+                {videoPhaseLabel}
+              </button>
+              <button
+                data-testid="pipeline-date-enforcement"
+                className={pipelineButtonClass(pipelineStages.date)}
+                disabled={busyAction !== null || stats.videoPhaseState !== "complete"}
+                onClick={onRunDateEnforcement}
+              >
+                {busyAction === "date-enforcement" ? "Enforcing..." : datePhaseLabel}
               </button>
               <button
                 data-testid="pipeline-group"
                 className={pipelineButtonClass(pipelineStages.group)}
-                disabled={busyAction !== null || stats.dateNeedsReview > 0 || (stats.videoTotal > 0 && stats.videoPhaseState !== "complete")}
+                disabled={busyAction !== null || stats.dateNeedsReview > 0 || stats.videoPhaseState !== "complete"}
                 onClick={onRunGrouping}
               >
-                {busyAction === "group" ? "Grouping..." : "4) Group"}
+                {busyAction === "group" ? "Grouping..." : "5) Group"}
               </button>
               <button
                 data-testid="pipeline-finalize"
@@ -474,7 +534,7 @@ export function App() {
                 disabled={busyAction !== null || stats.dateNeedsReview > 0 || (stats.videoTotal > 0 && stats.videoPhaseState !== "complete")}
                 onClick={onFinalize}
               >
-                {busyAction === "finalize" ? "Finalizing..." : "5) Finalize"}
+                {busyAction === "finalize" ? "Finalizing..." : "6) Finalize"}
               </button>
               <button
                 data-testid="pipeline-reset-session"
@@ -486,25 +546,8 @@ export function App() {
               </button>
             </div>
             <div className="muted" data-testid="pipeline-phase-help">
-              Index Media now performs scanning, metadata extraction, and missing-date detection before grouping.
+              {"Pipeline order: Index -> Image Review -> Video Review -> Date Enforcement -> Group -> Finalize."}
             </div>
-          </div>
-          <div className="card" data-testid="dashboard-video-review-tile">
-            <h3 style={{ marginTop: 0 }}>Video Review</h3>
-            <div className="muted" data-testid="dashboard-video-review-status">Status: {stats.videoPhaseState}</div>
-            <div className="row">
-              <div data-testid="dashboard-video-total">Total: {stats.videoTotal}</div>
-              <div data-testid="dashboard-video-flagged">Flagged: {stats.videoFlagged}</div>
-              <div data-testid="dashboard-video-excluded">Excluded: {stats.videoExcluded}</div>
-            </div>
-            <button
-              data-testid="dashboard-review-videos"
-              className="primaryBtn"
-              disabled={stats.videoPhaseState === "pending" && stats.dateNeedsReview > 0}
-              onClick={() => setTab("videos")}
-            >
-              Review Videos
-            </button>
           </div>
         </>
       )}
@@ -537,6 +580,45 @@ export function App() {
         </div>
       )}
 
+      {tab === "images" && (
+        <div className="card" data-testid="image-review-card">
+          <ImageReviewView
+            items={imageItems}
+            showExcluded={showExcludedImages}
+            onToggleShowExcluded={setShowExcludedImages}
+            onKeepBestOnly={async (burstGroupId) => {
+              await keepBestOnly(burstGroupId);
+              await refreshAll();
+            }}
+            onKeepAll={async (burstGroupId) => {
+              await keepAllBurst(burstGroupId);
+              await refreshAll();
+            }}
+            onExcludeSelected={async (ids) => {
+              const moved = await excludeMediaItems(ids);
+              await refreshAll();
+              setMessage(`${moved} items moved to recycle`);
+            }}
+            onExcludeSingle={async (id) => {
+              await excludeMediaItem(id);
+              await refreshAll();
+              setMessage("Item moved to recycle");
+            }}
+            onRestoreSingle={async (id) => {
+              await restoreMediaItem(id);
+              await refreshAll();
+              setMessage("Item restored");
+            }}
+            onDone={async () => {
+              await completeImageReviewAndStartVideoReview();
+              await refreshAll();
+              setTab("videos");
+              setMessage("Image review complete. Proceeding to Video Review.");
+            }}
+          />
+        </div>
+      )}
+
       {tab === "videos" && (
         <div className="card" data-testid="video-review-card">
           <VideoReviewView
@@ -550,8 +632,8 @@ export function App() {
             onProceed={async () => {
               await completeVideoReviewAndRunGrouping();
               await refreshAll();
-              setTab("events");
-              setMessage("Video review complete. Event grouping started.");
+              setTab("dates");
+              setMessage("Video review complete. Run Date Enforcement next.");
             }}
           />
         </div>
@@ -1603,6 +1685,379 @@ function EventThumbCard({
   );
 }
 
+function ImageReviewView({
+  items,
+  showExcluded,
+  onToggleShowExcluded,
+  onKeepBestOnly,
+  onKeepAll,
+  onExcludeSelected,
+  onExcludeSingle,
+  onRestoreSingle,
+  onDone
+}: {
+  items: ImageReviewItem[];
+  showExcluded: boolean;
+  onToggleShowExcluded: (next: boolean) => void;
+  onKeepBestOnly: (burstGroupId: string) => Promise<void>;
+  onKeepAll: (burstGroupId: string) => Promise<void>;
+  onExcludeSelected: (ids: number[]) => Promise<void>;
+  onExcludeSingle: (id: number) => Promise<void>;
+  onRestoreSingle: (id: number) => Promise<void>;
+  onDone: () => Promise<void>;
+}) {
+  const [viewMode, setViewMode] = useState<"all" | "flagged" | "burst">("flagged");
+  const [sortMode, setSortMode] = useState<"date" | "size" | "sharpness">("date");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [previewById, setPreviewById] = useState<Record<number, string>>({});
+  const [modalIndex, setModalIndex] = useState<number | null>(null);
+  const [thumbs, setThumbs] = useState<Record<number, string>>({});
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [columnCount, setColumnCount] = useState(4);
+  const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
+
+  const baseItems = useMemo(
+    () => items.filter((item) => (showExcluded ? item.status === "excluded" : item.status !== "excluded")),
+    [items, showExcluded]
+  );
+  const sortedItems = useMemo(() => {
+    const cloned = [...baseItems];
+    cloned.sort((a, b) => {
+      if (sortMode === "size") return b.fileSizeBytes - a.fileSizeBytes;
+      if (sortMode === "sharpness") return (b.sharpnessScore ?? 0) - (a.sharpnessScore ?? 0);
+      return (a.dateTaken ?? "").localeCompare(b.dateTaken ?? "");
+    });
+    return cloned;
+  }, [baseItems, sortMode]);
+  const visibleItems = useMemo(() => {
+    if (viewMode === "all") return sortedItems;
+    if (viewMode === "flagged") return sortedItems.filter((item) => item.imageFlags.length > 0);
+    return sortedItems.filter((item) => item.burstGroupId);
+  }, [sortedItems, viewMode]);
+
+  const burstGroups = useMemo(() => {
+    const map = new Map<string, ImageReviewItem[]>();
+    for (const item of visibleItems) {
+      if (!item.burstGroupId) continue;
+      const current = map.get(item.burstGroupId) ?? [];
+      current.push(item);
+      map.set(item.burstGroupId, current);
+    }
+    return map;
+  }, [visibleItems]);
+
+  useEffect(() => {
+    const pending = visibleItems
+      .filter((item) => !thumbs[item.id])
+      .slice(0, 20)
+      .map((item) =>
+        getDateMediaThumbnail(item.id).then((src) => ({ id: item.id, src: src ?? getDateThumbFallbackDataUrl(item.filename) }))
+      );
+    if (!pending.length) return;
+    Promise.all(pending).then((rows) => {
+      setThumbs((prev) => {
+        const next = { ...prev };
+        for (const row of rows) next[row.id] = row.src;
+        return next;
+      });
+    });
+  }, [visibleItems, thumbs]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setColumnCount(calculateColumnCount(entry.contentRect.width, 180));
+      }
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const rowCount = calculateRowCount(visibleItems.length, columnCount);
+  const rowVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => ITEM_HEIGHT + 16,
+    overscan: 3
+  });
+  const modalItems = viewMode === "burst" ? visibleItems : visibleItems;
+  const modalItem = modalIndex === null ? null : modalItems[modalIndex] ?? null;
+
+  async function openModal(index: number) {
+    const item = modalItems[index];
+    if (!item) return;
+    if (!previewById[item.id]) {
+      const src = (await getEventGroupMediaPreview(item.id)) ?? "";
+      setPreviewById((prev) => ({ ...prev, [item.id]: src }));
+    }
+    setModalIndex(index);
+  }
+
+  const flaggedCount = baseItems.filter((item) => item.imageFlags.length > 0).length;
+  const unflaggedCount = baseItems.filter((item) => item.imageFlags.length === 0).length;
+
+  return (
+    <div data-testid="image-review-view">
+      <h3 style={{ marginTop: 0 }}>Image Review</h3>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+        <div className="row">
+          <button data-testid="image-show-active" className={showExcluded ? "secondaryBtn" : "primaryBtn"} onClick={() => onToggleShowExcluded(false)}>
+            Show active
+          </button>
+          <button data-testid="image-show-excluded" className={showExcluded ? "primaryBtn" : "secondaryBtn"} onClick={() => onToggleShowExcluded(true)}>
+            Show excluded
+          </button>
+        </div>
+        <div className="muted" data-testid="image-filter-summary">Showing {flaggedCount} flagged, {unflaggedCount} unflagged - {baseItems.length} total</div>
+      </div>
+
+      <div className="item" data-testid="image-filter-bar">
+        <div className="row">
+          <button data-testid="image-filter-all" className={viewMode === "all" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("all")}>All Images</button>
+          <button data-testid="image-filter-flagged" className={viewMode === "flagged" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("flagged")}>Flagged Only</button>
+          <button data-testid="image-filter-burst" className={viewMode === "burst" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("burst")}>Burst Groups</button>
+          <select data-testid="image-sort" value={sortMode} onChange={(e) => setSortMode(e.target.value as "date" | "size" | "sharpness")}>
+            <option value="date">Date</option>
+            <option value="size">File Size</option>
+            <option value="sharpness">Sharpness Score</option>
+          </select>
+        </div>
+        <div className="row">
+          <button data-testid="image-select-all-flagged" className="secondaryBtn" onClick={() => setSelectedIds(visibleItems.filter((i) => i.imageFlags.length > 0).map((i) => i.id))}>
+            Select All Flagged
+          </button>
+          <button data-testid="image-exclude-selected" className="primaryBtn" disabled={selectedIds.length === 0} onClick={() => setShowBulkConfirm(true)}>
+            Exclude Selected
+          </button>
+        </div>
+      </div>
+
+      {showBulkConfirm && selectedIds.length > 0 ? (
+        <div className="item" data-testid="image-bulk-confirm">
+          <div className="danger">Move {selectedIds.length} items to recycle? This will remove them from this group.</div>
+          <div className="row">
+            <button
+              data-testid="image-bulk-confirm-yes"
+              className="secondaryBtn"
+              onClick={() => {
+                void onExcludeSelected(selectedIds);
+                setSelectedIds([]);
+                setShowBulkConfirm(false);
+              }}
+            >
+              Confirm
+            </button>
+            <button data-testid="image-bulk-confirm-cancel" className="secondaryBtn" onClick={() => setShowBulkConfirm(false)}>Cancel</button>
+          </div>
+        </div>
+      ) : null}
+
+      {viewMode === "burst" ? (
+        <div data-testid="image-burst-groups-view">
+          {Array.from(burstGroups.entries()).map(([groupId, groupItems]) => (
+            <div key={groupId} className="item" data-testid={`image-burst-group-${groupId}`}>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <div className="muted">Burst group - {groupItems.length} shots, best auto-selected</div>
+                <div className="row">
+                  <button data-testid={`image-keep-best-only-${groupId}`} className="secondaryBtn" onClick={() => void onKeepBestOnly(groupId)}>Keep Best Only</button>
+                  <button data-testid={`image-keep-all-${groupId}`} className="secondaryBtn" onClick={() => void onKeepAll(groupId)}>Keep All</button>
+                </div>
+              </div>
+              <div className="eventGroupsGrid">
+                {groupItems.map((item) => (
+                  <ImageCard
+                    key={item.id}
+                    item={item}
+                    selected={selected.has(item.id)}
+                    thumbnail={thumbs[item.id] || getDateThumbFallbackDataUrl(item.filename)}
+                    onToggle={() => setSelectedIds((prev) => prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id])}
+                    onOpen={() => void openModal(visibleItems.findIndex((entry) => entry.id === item.id))}
+                    onExclude={() => void onExcludeSingle(item.id)}
+                    onRestore={() => void onRestoreSingle(item.id)}
+                    muted={showExcluded}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div
+          className="eventVirtualGridViewport"
+          ref={containerRef}
+          data-testid="image-virtual-grid"
+          style={{ height: "56vh", overflow: "auto", position: "relative" }}
+        >
+          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const startIndex = virtualRow.index * columnCount;
+              const rowItems = visibleItems.slice(startIndex, startIndex + columnCount);
+              return (
+                <div key={virtualRow.key} style={{ position: "absolute", top: virtualRow.start, left: 0, right: 0, display: "flex", gap: "8px", padding: "0 8px" }}>
+                  {rowItems.map((item) => (
+                    <ImageCard
+                      key={item.id}
+                      item={item}
+                      selected={selected.has(item.id)}
+                      thumbnail={thumbs[item.id] || getDateThumbFallbackDataUrl(item.filename)}
+                      onToggle={() => setSelectedIds((prev) => prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id])}
+                      onOpen={() => void openModal(visibleItems.findIndex((entry) => entry.id === item.id))}
+                      onExclude={() => void onExcludeSingle(item.id)}
+                      onRestore={() => void onRestoreSingle(item.id)}
+                      muted={showExcluded}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {!showExcluded ? (
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+          <button
+            data-testid="image-done-proceed"
+            className="primaryBtn"
+            onClick={() => {
+              const continuing = items.filter((item) => item.status !== "excluded").length;
+              const excluded = items.filter((item) => item.status === "excluded").length;
+              const pending = items.filter((item) => item.status === "indexed" && item.imageFlags.length > 0).length;
+              const ok = window.confirm(
+                `${continuing} images will continue to pipeline. ${excluded} images have been excluded. ${pending} flagged images have not been reviewed. Proceed?`
+              );
+              if (!ok) return;
+              void onDone();
+            }}
+          >
+            Done - Proceed to Video Review
+          </button>
+        </div>
+      ) : null}
+
+      {modalItem ? (
+        <div className="lightboxOverlay" data-testid="image-preview-modal-overlay" onClick={() => setModalIndex(null)}>
+          <div className="lightboxCard" data-testid="image-preview-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <strong>{modalItem.filename}</strong>
+              <button data-testid="image-preview-close" className="secondaryBtn" onClick={() => setModalIndex(null)}>Close</button>
+            </div>
+            {previewById[modalItem.id] ? (
+              <img data-testid="image-preview-asset" src={previewById[modalItem.id]} alt={modalItem.filename} style={{ width: "100%", maxHeight: "55vh", objectFit: "contain" }} />
+            ) : (
+              <div className="muted">Loading...</div>
+            )}
+            <div className="muted" data-testid="image-preview-meta">
+              {formatFileSize(modalItem.fileSizeBytes)} • {modalItem.dateTaken ?? "(missing date)"} • sharpness {(modalItem.sharpnessScore ?? 0).toFixed(1)}
+            </div>
+            <div className="row" style={{ flexWrap: "wrap" }}>
+              {modalItem.imageFlags.map((flag) => <span key={flag} className="muted">{flag}</span>)}
+            </div>
+            {modalItem.burstGroupId ? (
+              <div className="row" data-testid="image-preview-filmstrip">
+                {visibleItems
+                  .filter((item) => item.burstGroupId === modalItem.burstGroupId)
+                  .map((item) => (
+                    <button
+                      key={item.id}
+                      data-testid={`image-filmstrip-item-${item.id}`}
+                      className="secondaryBtn"
+                      onClick={() => setModalIndex(visibleItems.findIndex((entry) => entry.id === item.id))}
+                    >
+                      {item.filename}
+                    </button>
+                  ))}
+              </div>
+            ) : null}
+            <div className="row">
+              <button data-testid="image-preview-prev" className="secondaryBtn" disabled={(modalIndex ?? 0) <= 0} onClick={() => setModalIndex((prev) => (prev === null ? prev : Math.max(0, prev - 1)))}>
+                Previous
+              </button>
+              <button data-testid="image-preview-next" className="secondaryBtn" disabled={(modalIndex ?? 0) >= modalItems.length - 1} onClick={() => setModalIndex((prev) => (prev === null ? prev : Math.min(modalItems.length - 1, prev + 1)))}>
+                Next
+              </button>
+              <button
+                data-testid="image-preview-exclude"
+                className="secondaryBtn"
+                onClick={async () => {
+                  await onExcludeSingle(modalItem.id);
+                  setModalIndex((prev) => {
+                    if (prev === null) return prev;
+                    return Math.min(prev, Math.max(0, modalItems.length - 2));
+                  });
+                }}
+              >
+                Exclude
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ImageCard({
+  item,
+  selected,
+  thumbnail,
+  onToggle,
+  onOpen,
+  onExclude,
+  onRestore,
+  muted
+}: {
+  item: ImageReviewItem;
+  selected: boolean;
+  thumbnail: string;
+  onToggle: () => void;
+  onOpen: () => void;
+  onExclude: () => void;
+  onRestore: () => void;
+  muted: boolean;
+}) {
+  const [confirmExclude, setConfirmExclude] = useState(false);
+  return (
+    <div className={selected ? "eventThumbCard selected" : "eventThumbCard"} data-testid={`image-item-${item.id}`} style={{ flex: "1 1 0", minWidth: 0, opacity: muted ? 0.65 : 1 }}>
+      <button data-testid={`image-open-${item.id}`} className="eventThumbPreviewButton" onClick={onOpen}>
+        <img className="eventThumbImage" src={thumbnail} alt={item.filename} style={{ width: "100%", height: THUMBNAIL_SIZE, objectFit: "cover" }} />
+      </button>
+      <div className="eventThumbMeta" style={{ padding: "6px 8px" }}>
+        <strong className="truncateOneLine" style={{ fontSize: 12 }}>{item.filename}</strong>
+        <div className="muted truncateOneLine" style={{ fontSize: 11 }}>{formatFileSize(item.fileSizeBytes)} • {item.dateTaken ?? "(missing date)"}</div>
+        <div className="row" style={{ flexWrap: "wrap" }}>
+          {item.imageFlags.includes("small_file") ? <span data-testid={`image-flag-small-${item.id}`} className="muted">small_file</span> : null}
+          {item.imageFlags.includes("blurry") ? <span data-testid={`image-flag-blurry-${item.id}`} className="muted">blurry</span> : null}
+          {item.imageFlags.includes("burst_shot") ? <span data-testid={`image-flag-burst-${item.id}`} className="muted">burst_shot</span> : null}
+          {item.isBurstPrimary ? <span data-testid={`image-flag-best-${item.id}`} className="ok">Best</span> : null}
+        </div>
+      </div>
+      <div style={{ padding: "0 8px 8px" }} className="row">
+        {item.status === "excluded" ? (
+          <button data-testid={`image-restore-${item.id}`} className="secondaryBtn" onClick={onRestore}>Restore</button>
+        ) : confirmExclude ? (
+          <div data-testid={`image-exclude-confirm-${item.id}`} className="row">
+            <button data-testid={`image-exclude-confirm-yes-${item.id}`} className="secondaryBtn" onClick={onExclude}>Confirm</button>
+            <button data-testid={`image-exclude-confirm-cancel-${item.id}`} className="secondaryBtn" onClick={() => setConfirmExclude(false)}>Cancel</button>
+          </div>
+        ) : (
+          <>
+            <button data-testid={`image-select-${item.id}`} className="eventThumbSelectButton" onClick={onToggle}>
+              {selected ? "Selected" : "Select"}
+            </button>
+            <button data-testid={`image-exclude-${item.id}`} className="secondaryBtn" onClick={() => setConfirmExclude(true)} style={{ borderColor: "#b91c1c", color: "#b91c1c" }}>
+              Exclude
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function VideoReviewView({
   items,
   excludedCount,
@@ -1622,6 +2077,7 @@ function VideoReviewView({
   onMessage: (message: string) => void;
   onProceed: () => Promise<void>;
 }) {
+  const [activeFilter, setActiveFilter] = useState<"size" | "duration">("size");
   const [sizeThresholdMb, setSizeThresholdMb] = useState(5);
   const [durationThresholdSecs, setDurationThresholdSecs] = useState(10);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -1639,9 +2095,9 @@ function VideoReviewView({
       items.filter((item) => {
         const underSize = item.fileSizeBytes <= sizeThresholdMb * 1024 * 1024;
         const underDuration = item.durationSecs <= durationThresholdSecs;
-        return underSize || underDuration;
+        return activeFilter === "size" ? underSize : underDuration;
       }),
-    [items, sizeThresholdMb, durationThresholdSecs]
+    [items, sizeThresholdMb, durationThresholdSecs, activeFilter]
   );
 
   useEffect(() => {
@@ -1771,10 +2227,34 @@ function VideoReviewView({
             Show excluded
           </button>
         </div>
-        <div data-testid="video-filter-summary" className="muted">Showing {filtered.length} of {items.length} videos</div>
+        <div data-testid="video-filter-summary" className="muted">
+          {activeFilter === "size"
+            ? `Showing videos under ${sizeThresholdMb} MB`
+            : `Showing videos under ${durationThresholdSecs} sec`}
+        </div>
       </div>
 
       <div className="item" data-testid="video-filter-bar">
+        <div className="row">
+          <label>
+            <input
+              data-testid="video-filter-mode-size"
+              type="radio"
+              checked={activeFilter === "size"}
+              onChange={() => setActiveFilter("size")}
+            />
+            Filter by Size
+          </label>
+          <label>
+            <input
+              data-testid="video-filter-mode-duration"
+              type="radio"
+              checked={activeFilter === "duration"}
+              onChange={() => setActiveFilter("duration")}
+            />
+            Filter by Duration
+          </label>
+        </div>
         <label htmlFor="video-size-slider">Show videos under {sizeThresholdMb} MB</label>
         <input
           id="video-size-slider"
@@ -1783,6 +2263,7 @@ function VideoReviewView({
           min={0}
           max={50}
           value={sizeThresholdMb}
+          disabled={activeFilter !== "size"}
           onChange={(e) => setSizeThresholdMb(Number(e.target.value))}
         />
         <label htmlFor="video-duration-slider">Show videos under {durationThresholdSecs} sec</label>
@@ -1793,6 +2274,7 @@ function VideoReviewView({
           min={0}
           max={120}
           value={durationThresholdSecs}
+          disabled={activeFilter !== "duration"}
           onChange={(e) => setDurationThresholdSecs(Number(e.target.value))}
         />
         <div className="row">
@@ -1842,7 +2324,7 @@ function VideoReviewView({
                     const isSelected = selected.has(item.id);
                     const underSize = item.fileSizeBytes <= sizeThresholdMb * 1024 * 1024;
                     const underDuration = item.durationSecs <= durationThresholdSecs;
-                    const flagged = underSize || underDuration;
+                    const flagged = activeFilter === "size" ? underSize : underDuration;
                     const previewSrc = previewById[item.id] ?? "";
                     const thumbSrc = thumbs[item.id] || getDateThumbFallbackDataUrl(item.filename);
                     return (
@@ -1899,12 +2381,12 @@ function VideoReviewView({
             className="primaryBtn"
             onClick={() => {
               const groupedCount = items.length;
-              const ok = window.confirm(`${groupedCount} videos will be grouped. ${excludedCount} videos have been excluded. Proceed?`);
+              const ok = window.confirm(`${groupedCount} videos will continue to Date Enforcement. ${excludedCount} videos have been excluded. Proceed?`);
               if (!ok) return;
               void onProceed();
             }}
           >
-            Done - Proceed to Event Grouping
+            Done - Proceed to Date Enforcement
           </button>
         </div>
       ) : null}

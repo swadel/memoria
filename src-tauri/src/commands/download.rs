@@ -5,7 +5,7 @@ use tauri::State;
 
 use crate::{
     models::SessionInput,
-    services::{date_enforcer, exiftool, runtime_log, video_review},
+    services::{exiftool, image_review, runtime_log},
     AppState,
 };
 
@@ -81,7 +81,7 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
         let file_size = tokio::fs::metadata(&staged_path).await?.len() as i64;
         conn.execute(
             "INSERT OR IGNORE INTO media_items(icloud_id, filename, status, current_path, original_path, file_size, mime_type)
-             VALUES(?1, ?2, 'downloading', '', '', ?3, ?4)",
+             VALUES(?1, ?2, 'queued', '', '', ?3, ?4)",
             params![icloud_id, filename, file_size, guess_mime(source_path)],
         )?;
         let meta = match exiftool::read_metadata(staged_path.as_path()).await {
@@ -100,7 +100,7 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
         };
         conn.execute(
             "UPDATE media_items
-             SET current_path=?1, original_path=?2, status='metadata_extracted', width=?3, height=?4, mime_type=COALESCE(?5, mime_type), date_taken=?6, duration_secs=?7, content_identifier=?8, video_codec=?9, date_taken_source='exif', updated_at=CURRENT_TIMESTAMP
+             SET current_path=?1, original_path=?2, status='indexed', width=?3, height=?4, mime_type=COALESCE(?5, mime_type), date_taken=?6, duration_secs=?7, content_identifier=?8, video_codec=?9, date_taken_source='exif', updated_at=CURRENT_TIMESTAMP
              WHERE icloud_id=?10",
             params![
                 staged_path.to_string_lossy().to_string(),
@@ -134,12 +134,8 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
         "UPDATE download_sessions SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?1",
         [session_id],
     )?;
-    runtime_log::info("download", format!("Session {session_id} indexing complete. Starting date evaluation."));
-
-    let ai = state.ai_client().await;
-    date_enforcer::evaluate(&conn, &ai).await?;
-    video_review::prepare_video_review(&conn, &state.root_output()).await?;
-    runtime_log::info("download", format!("Session {session_id} date evaluation complete."));
+    image_review::run_image_review_scan(&conn).await?;
+    runtime_log::info("download", format!("Session {session_id} indexing complete."));
     Ok(session_id)
 }
 

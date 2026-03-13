@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, VideoReviewItem } from "../types";
+import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, ImageReviewItem, VideoReviewItem } from "../types";
 
 declare global {
   interface Window {
@@ -98,6 +98,10 @@ export function applyDateApproval(mediaItemId: number, date: string | null) {
   return invokeCommand<void>("apply_date_approval", { mediaItemId, media_item_id: mediaItemId, date });
 }
 
+export function runDateEnforcement() {
+  return invokeCommand<void>("run_date_enforcement");
+}
+
 export function runEventGrouping() {
   return invokeCommand<void>("run_event_grouping");
 }
@@ -157,6 +161,26 @@ export function finalizeOrganization() {
 
 export function getVideoReviewItems(includeExcluded: boolean) {
   return invokeCommand<VideoReviewItem[]>("get_video_review_items", { includeExcluded, include_excluded: includeExcluded });
+}
+
+export function runImageReviewScan() {
+  return invokeCommand<void>("run_image_review_scan");
+}
+
+export function getImageReviewItems(includeExcluded: boolean) {
+  return invokeCommand<ImageReviewItem[]>("get_image_review_items", { includeExcluded, include_excluded: includeExcluded });
+}
+
+export function keepBestOnly(burstGroupId: string) {
+  return invokeCommand<number>("keep_best_only", { burstGroupId, burst_group_id: burstGroupId });
+}
+
+export function keepAllBurst(burstGroupId: string) {
+  return invokeCommand<void>("keep_all_burst", { burstGroupId, burst_group_id: burstGroupId });
+}
+
+export function completeImageReviewAndStartVideoReview() {
+  return invokeCommand<void>("complete_image_review_and_start_video_review");
 }
 
 export function excludeVideos(mediaItemIds: number[]) {

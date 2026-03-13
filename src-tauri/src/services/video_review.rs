@@ -10,7 +10,7 @@ pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Pat
     let mut stmt = conn.prepare(
         "SELECT id, filename, COALESCE(current_path, ''), COALESCE(file_size, 0), duration_secs, video_width, video_height, video_codec
          FROM media_items
-         WHERE mime_type LIKE 'video/%' AND status='date_verified'",
+         WHERE mime_type LIKE 'video/%' AND status='image_reviewed'",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((
@@ -71,6 +71,12 @@ pub fn video_phase_state(conn: &rusqlite::Connection) -> Result<String> {
 }
 
 pub fn complete_video_review(conn: &rusqlite::Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE media_items
+         SET status='video_reviewed', updated_at=CURRENT_TIMESTAMP
+         WHERE status='image_reviewed' AND status != 'excluded'",
+        [],
+    )?;
     db::set_setting(conn, VIDEO_PHASE_STATE_KEY, "complete")?;
     Ok(())
 }
@@ -110,11 +116,11 @@ pub fn restore_media_items(
 }
 
 pub fn exclude_videos(conn: &mut rusqlite::Connection, root_output: &Path, media_item_ids: &[i64]) -> Result<usize> {
-    exclude_media_items(conn, root_output, media_item_ids, &["date_verified"])
+    exclude_media_items(conn, root_output, media_item_ids, &["image_reviewed"])
 }
 
 pub fn restore_videos(conn: &mut rusqlite::Connection, root_output: &Path, media_item_ids: &[i64]) -> Result<usize> {
-    restore_media_items(conn, root_output, media_item_ids, "date_verified")
+    restore_media_items(conn, root_output, media_item_ids, "image_reviewed")
 }
 
 fn move_media_between_statuses(
@@ -277,7 +283,7 @@ mod tests {
         std::fs::write(&src, b"video").expect("video");
         conn.execute(
             "INSERT INTO media_items(icloud_id, filename, current_path, status, mime_type, date_taken)
-             VALUES(?1, ?2, ?3, 'date_verified', 'video/quicktime', '2026-03-11')",
+             VALUES(?1, ?2, ?3, 'image_reviewed', 'video/quicktime', '2026-03-11')",
             params!["v1", "sample.mov", src.to_string_lossy().to_string()],
         )
         .expect("insert");
@@ -300,7 +306,7 @@ mod tests {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .expect("restored row");
-        assert_eq!(status2, "date_verified");
+        assert_eq!(status2, "image_reviewed");
         assert!(path2.contains("staging"));
 
         let excluded_audit_count: i64 = conn

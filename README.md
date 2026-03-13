@@ -4,13 +4,13 @@
 
 > Intelligently organize local photos and videos into a structured, event-based archive.
 
-Memoria is a Windows-first desktop application that indexes local photos and videos, enforces date metadata, and organizes media into meaningful event folders — all with you in control of every decision.
+Memoria is a Windows-first desktop application that indexes local photos and videos, enforces date metadata, lets you review/exclude short or unwanted videos, and organizes media into meaningful event folders — all with you in control of every decision.
 
 ---
 
 ## Why Memoria
 
-Large media libraries often have inconsistent dates and no useful folder structure. Memoria gives you a deterministic, auditable pipeline for indexing, date review, grouping, and final filing.
+Large media libraries often have inconsistent dates and no useful folder structure. Memoria gives you a deterministic, auditable pipeline for indexing, date review, video review, grouping, and final filing.
 
 The folder structure Memoria produces looks like this:
 
@@ -58,22 +58,36 @@ Memoria clusters your photos into events automatically:
 
 Photos not associated with any event go into a `[YEAR] - Misc` folder.
 
+### Video Review (Pre-Grouping)
+- Dedicated Video Review phase between Date Enforcement and Event Grouping
+- Reviews all `video/*` items with file size and duration metadata
+- Real-time filter sliders for "under X MB" and "under Y sec" candidates
+- Inline preview behavior:
+  - short clips can play inline
+  - longer clips open a modal/lightbox with full controls
+- Exclude actions move files to `/recycle/` with `status='excluded'` and audit log entries
+- Excluded videos are not included in event grouping until restored
+
 ### Event Group Review and Reassignment
 - Event Group cards are clickable and open a dedicated detail view for that group
 - Group detail uses a virtualized thumbnail grid (via `@tanstack/virtual`) to stay responsive with large groups
 - Each item shows a thumbnail, filename, and date taken; clicking the thumbnail opens a full-size image/video preview
 - Multi-select supports click, shift+click range selection, **Select All**, and **Deselect All**
 - Selected items can be moved to another existing group or to a newly created group in one action
+- Individual cards support soft delete with inline confirmation (**Exclude** -> recycle)
+- Multiselect toolbar supports bulk soft delete with inline banner confirmation (**Exclude Selected**)
+- Group detail supports **Show active | Show excluded** with per-item restore in excluded mode
 - Group names are enforced as case-insensitive unique values (for rename and create), with inline validation errors
-- Empty groups are intentionally preserved after moves and can then be deleted explicitly from Event Group Review
+- Empty groups are intentionally preserved after moves/excludes and can then be deleted explicitly from Event Group Review
 - New empty groups can be added manually with **Add Group** and are shown immediately with `0 items`
 
 ### Non-Destructive by Design
 Memoria never hard-deletes media in the normal pipeline:
 - Indexing writes staged copies under `/staging/`
 - Finalization writes organized copies under `/organized/`
+- Exclude actions move files to `/recycle/` (soft delete), with restore support back to `/staging/`
 - Reset Session can clear app state with or without deleting generated folders
-- Audit log rows capture date approvals/skips and file finalization events
+- Audit log rows capture date approvals/skips, exclude/restore actions, and file finalization events
 
 ---
 
@@ -134,16 +148,22 @@ npm run tauri dev
    - `Approve/Edit` writes the selected date and sets `date_taken_source='user_override'`
    - `Skip` clears review-required state and marks item `date_verified`
 
-3. **Group**
+3. **Video Review**
+   - Reviews all videos after date verification and before grouping
+   - Supports slider-based filtering by size/duration and preview playback
+   - Exclude/restore moves files between `/staging/` and `/recycle/`
+   - Excluded items are marked `status='excluded'` and skipped during grouping
+
+4. **Group**
    - Groups `date_verified` items into event clusters
    - Creates event groups and links items with `status='grouped'`
-   - Supports click-through detail review, multiselect item moves, manual group creation, and delete of empty groups only
+   - Supports click-through detail review, multiselect item moves, soft delete/restore, manual group creation, and delete of empty groups only
 
-4. **Finalize**
+5. **Finalize**
    - Copies grouped items into `/organized/<year>/<year - event>/`
    - Updates each item to `status='filed'` and records audit events
 
-5. **Reset Session**
+6. **Reset Session**
    - Clears pipeline DB state
    - Optionally deletes generated folders: `/staging`, `/organized`, `/recycle`
 
@@ -170,7 +190,7 @@ All settings are managed through the in-app Settings panel. Nothing requires man
 | Output directory | `~/Pictures/Memoria` | Where organized folders are created |
 | Download concurrency | 3 | Parallel iCloud downloads |
 | AI cost cap | $20.00 | Processing pauses if this amount is reached |
-| Grouping time window | 3 days | Max gap between photos in the same event cluster |
+| Grouping time window | 2 days | Max default gap between photos in the same event cluster |
 | HEIC handling | Keep originals | Whether to convert HEIC to JPEG on download |
 | Runtime logging | `info` | Set `MEMORIA_LOG_LEVEL` to `off`, `warn`, `info`, or `debug` for terminal verbosity |
 
@@ -216,7 +236,7 @@ memoria/
       db/                 # SQLite schema, migrations, queries
       models/             # Shared data structures
   src/                    # React frontend
-    App.tsx               # Main UI (Dashboard, Date Approval, Events, Settings)
+    App.tsx               # Main UI (Dashboard, Date Approval, Video Review, Events, Settings)
     lib/api.ts            # Tauri invoke wrappers
   vendor/                 # Bundled third-party binaries
     exiftool.exe

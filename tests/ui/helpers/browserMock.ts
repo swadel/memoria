@@ -43,6 +43,20 @@ type VideoReviewItem = {
   status: string;
 };
 
+type ImageReviewItem = {
+  id: number;
+  filename: string;
+  currentPath: string;
+  dateTaken: string | null;
+  mimeType: string;
+  fileSizeBytes: number;
+  sharpnessScore: number | null;
+  burstGroupId: string | null;
+  isBurstPrimary: boolean;
+  imageFlags: string[];
+  status: string;
+};
+
 function buildState(profile: BrowserFixtureProfile) {
   const dateItems: DateEstimate[] =
     profile === "settings-only"
@@ -119,19 +133,77 @@ function buildState(profile: BrowserFixtureProfile) {
 
   const stats = {
     total: 8,
-    downloading: 0,
-    indexed: 8,
+    indexed: 2,
+    imageReview: 2,
+    imageVerified: 4,
+    dateReview: profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
     dateNeedsReview: profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
     dateVerified: 5,
     grouped: 2,
     filed: 1,
-    errors: 0,
+    imageFlaggedPending: 2,
+    imagePhaseState: (profile === "pre-video" ? "in_progress" : "complete") as "pending" | "in_progress" | "complete",
     videoTotal: 3,
     videoFlagged: 2,
     videoExcluded: 1,
     videoUnreviewedFlagged: 2,
     videoPhaseState: (profile === "pre-video" ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
   };
+
+  const imageItems: ImageReviewItem[] = [
+    {
+      id: 501,
+      filename: "burst_001.jpg",
+      currentPath: "C:\\fixture\\output\\staging\\burst_001.jpg",
+      dateTaken: "2026-03-01 10:00:00",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 420_000,
+      sharpnessScore: 82.5,
+      burstGroupId: "burst-a",
+      isBurstPrimary: false,
+      imageFlags: ["small_file", "burst_shot"],
+      status: "indexed"
+    },
+    {
+      id: 502,
+      filename: "burst_002.jpg",
+      currentPath: "C:\\fixture\\output\\staging\\burst_002.jpg",
+      dateTaken: "2026-03-01 10:00:02",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 530_000,
+      sharpnessScore: 132.8,
+      burstGroupId: "burst-a",
+      isBurstPrimary: true,
+      imageFlags: [],
+      status: "indexed"
+    },
+    {
+      id: 503,
+      filename: "blurry_001.jpg",
+      currentPath: "C:\\fixture\\output\\staging\\blurry_001.jpg",
+      dateTaken: "2026-03-02 11:20:00",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 1_500_000,
+      sharpnessScore: 42.2,
+      burstGroupId: null,
+      isBurstPrimary: false,
+      imageFlags: ["blurry"],
+      status: "indexed"
+    },
+    {
+      id: 504,
+      filename: "excluded_001.jpg",
+      currentPath: "C:\\fixture\\output\\recycle\\excluded_001.jpg",
+      dateTaken: "2026-03-02 11:20:05",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 460_000,
+      sharpnessScore: 65.0,
+      burstGroupId: null,
+      isBurstPrimary: false,
+      imageFlags: ["small_file"],
+      status: "excluded"
+    }
+  ];
 
   const videoItems: VideoReviewItem[] = [
     {
@@ -145,7 +217,7 @@ function buildState(profile: BrowserFixtureProfile) {
       videoWidth: 1080,
       videoHeight: 1920,
       videoCodec: "h264",
-      status: "date_verified"
+      status: "image_reviewed"
     },
     {
       id: 602,
@@ -158,7 +230,7 @@ function buildState(profile: BrowserFixtureProfile) {
       videoWidth: 1920,
       videoHeight: 1080,
       videoCodec: "h264",
-      status: "date_verified"
+      status: "image_reviewed"
     },
     {
       id: 603,
@@ -188,6 +260,7 @@ function buildState(profile: BrowserFixtureProfile) {
     dateItems,
     eventGroups,
     eventGroupItemsByGroupId,
+    imageItems,
     videoItems,
     nextGroupId: 402
   };
@@ -247,7 +320,15 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               const includeExcluded = Boolean(args?.includeExcluded ?? args?.include_excluded);
               return Promise.resolve(
                 state.videoItems.filter((item: VideoReviewItem) =>
-                  includeExcluded ? ["date_verified", "excluded"].includes(item.status) : item.status === "date_verified"
+                  includeExcluded ? ["image_reviewed", "excluded"].includes(item.status) : item.status === "image_reviewed"
+                )
+              );
+            }
+            case "get_image_review_items": {
+              const includeExcluded = Boolean(args?.includeExcluded ?? args?.include_excluded);
+              return Promise.resolve(
+                state.imageItems.filter((item: ImageReviewItem) =>
+                  includeExcluded ? ["indexed", "image_reviewed", "excluded"].includes(item.status) : ["indexed", "image_reviewed"].includes(item.status)
                 )
               );
             }
@@ -263,6 +344,16 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "start_download_session":
             case "run_event_grouping":
             case "finalize_organization":
+            case "run_image_review_scan":
+            case "run_date_enforcement":
+              return Promise.resolve();
+            case "complete_image_review_and_start_video_review":
+              state.stats.imagePhaseState = "complete";
+              state.stats.videoPhaseState = "in_progress";
+              state.stats.imageFlaggedPending = 0;
+              state.imageItems = state.imageItems.map((item: ImageReviewItem) =>
+                item.status === "indexed" ? { ...item, status: "image_reviewed", imageFlags: [] } : item
+              );
               return Promise.resolve();
             case "complete_video_review_and_run_grouping":
               state.stats.videoPhaseState = "complete";
@@ -273,22 +364,43 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                 ids.includes(item.id) ? { ...item, status: "excluded", currentPath: item.currentPath.replace("\\staging\\", "\\recycle\\") } : item
               );
               state.stats.videoExcluded = state.videoItems.filter((item: VideoReviewItem) => item.status === "excluded").length;
-              state.stats.videoFlagged = state.videoItems.filter((item: VideoReviewItem) => item.status === "date_verified" && (item.fileSizeBytes <= 5 * 1024 * 1024 || item.durationSecs <= 10)).length;
+              state.stats.videoFlagged = state.videoItems.filter((item: VideoReviewItem) => item.status === "image_reviewed" && (item.fileSizeBytes <= 5 * 1024 * 1024 || item.durationSecs <= 10)).length;
               state.stats.videoUnreviewedFlagged = state.stats.videoFlagged;
               return Promise.resolve(ids.length);
             }
             case "restore_videos": {
               const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
               state.videoItems = state.videoItems.map((item: VideoReviewItem) =>
-                ids.includes(item.id) ? { ...item, status: "date_verified", currentPath: item.currentPath.replace("\\recycle\\", "\\staging\\") } : item
+                ids.includes(item.id) ? { ...item, status: "image_reviewed", currentPath: item.currentPath.replace("\\recycle\\", "\\staging\\") } : item
               );
               state.stats.videoExcluded = state.videoItems.filter((item: VideoReviewItem) => item.status === "excluded").length;
-              state.stats.videoFlagged = state.videoItems.filter((item: VideoReviewItem) => item.status === "date_verified" && (item.fileSizeBytes <= 5 * 1024 * 1024 || item.durationSecs <= 10)).length;
+              state.stats.videoFlagged = state.videoItems.filter((item: VideoReviewItem) => item.status === "image_reviewed" && (item.fileSizeBytes <= 5 * 1024 * 1024 || item.durationSecs <= 10)).length;
               state.stats.videoUnreviewedFlagged = state.stats.videoFlagged;
               return Promise.resolve(ids.length);
             }
+            case "keep_best_only": {
+              const burstGroupId = String(args?.burstGroupId ?? args?.burst_group_id ?? "");
+              let moved = 0;
+              state.imageItems = state.imageItems.map((item: ImageReviewItem) => {
+                if (item.burstGroupId !== burstGroupId || item.isBurstPrimary) return item;
+                moved += 1;
+                return { ...item, status: "excluded", currentPath: item.currentPath.replace("\\staging\\", "\\recycle\\") };
+              });
+              return Promise.resolve(moved);
+            }
+            case "keep_all_burst": {
+              const burstGroupId = String(args?.burstGroupId ?? args?.burst_group_id ?? "");
+              state.imageItems = state.imageItems.map((item: ImageReviewItem) =>
+                item.burstGroupId === burstGroupId ? { ...item, status: "image_reviewed", imageFlags: [] } : item
+              );
+              state.stats.imageFlaggedPending = state.imageItems.filter((item: ImageReviewItem) => item.status === "indexed" && item.imageFlags.length > 0).length;
+              return Promise.resolve();
+            }
             case "exclude_media_item": {
               const id = Number(args?.mediaItemId ?? args?.media_item_id ?? -1);
+              state.imageItems = state.imageItems.map((item: ImageReviewItem) =>
+                item.id === id ? { ...item, status: "excluded", currentPath: item.currentPath.replace("\\staging\\", "\\recycle\\") } : item
+              );
               for (const group of state.eventGroups as EventGroup[]) {
                 const items = state.eventGroupItemsByGroupId[group.id] ?? [];
                 for (const item of items) {
@@ -300,6 +412,9 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             }
             case "restore_media_item": {
               const id = Number(args?.mediaItemId ?? args?.media_item_id ?? -1);
+              state.imageItems = state.imageItems.map((item: ImageReviewItem) =>
+                item.id === id ? { ...item, status: "indexed", currentPath: item.currentPath.replace("\\recycle\\", "\\staging\\") } : item
+              );
               for (const group of state.eventGroups as EventGroup[]) {
                 const items = state.eventGroupItemsByGroupId[group.id] ?? [];
                 for (const item of items) {
@@ -311,6 +426,9 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             }
             case "exclude_media_items": {
               const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
+              state.imageItems = state.imageItems.map((item: ImageReviewItem) =>
+                ids.includes(item.id) ? { ...item, status: "excluded", currentPath: item.currentPath.replace("\\staging\\", "\\recycle\\") } : item
+              );
               for (const group of state.eventGroups as EventGroup[]) {
                 const items = state.eventGroupItemsByGroupId[group.id] ?? [];
                 for (const item of items) {
@@ -326,13 +444,16 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               state.stats = {
                 ...state.stats,
                 total: 0,
-                downloading: 0,
                 indexed: 0,
+                imageReview: 0,
+                imageVerified: 0,
+                dateReview: 0,
                 dateNeedsReview: 0,
                 dateVerified: 0,
                 grouped: 0,
                 filed: 0,
-                errors: 0,
+                imageFlaggedPending: 0,
+                imagePhaseState: "pending",
                 videoTotal: 0,
                 videoFlagged: 0,
                 videoExcluded: 0,

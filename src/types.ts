@@ -1,24 +1,25 @@
 export type ProcessingStatus =
   | "queued"
-  | "downloading"
-  | "downloaded"
-  | "metadata_extracted"
-  | "date_review_pending"
+  | "indexed"
+  | "image_reviewed"
+  | "video_reviewed"
   | "date_verified"
   | "excluded"
   | "grouped"
-  | "filed"
-  | "error";
+  | "filed";
 
 export interface DashboardStats {
   total: number;
-  downloading: number;
   indexed: number;
+  imageReview: number;
+  imageVerified: number;
+  dateReview: number;
   dateNeedsReview: number;
   dateVerified: number;
   grouped: number;
   filed: number;
-  errors: number;
+  imageFlaggedPending: number;
+  imagePhaseState: "pending" | "in_progress" | "complete";
   videoTotal: number;
   videoFlagged: number;
   videoExcluded: number;
@@ -54,7 +55,23 @@ export interface VideoReviewItem {
   videoWidth: number | null;
   videoHeight: number | null;
   videoCodec: string | null;
-  status: "date_verified" | "excluded" | string;
+  status: "image_reviewed" | "excluded" | string;
+}
+
+export type ImageFlagReason = "small_file" | "blurry" | "burst_shot";
+
+export interface ImageReviewItem {
+  id: number;
+  filename: string;
+  currentPath: string;
+  dateTaken: string | null;
+  mimeType: string;
+  fileSizeBytes: number;
+  sharpnessScore: number | null;
+  burstGroupId: string | null;
+  isBurstPrimary: boolean;
+  imageFlags: ImageFlagReason[];
+  status: "indexed" | "image_reviewed" | "excluded" | string;
 }
 
 export interface DateEstimate {

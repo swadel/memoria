@@ -22,7 +22,7 @@ pub fn run_event_grouping(state: State<'_, AppState>) -> Result<(), String> {
         let conn = state.open_conn().map_err(|e| e.to_string())?;
         let video_total: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM media_items WHERE mime_type LIKE 'video/%' AND status IN ('date_verified', 'excluded')",
+                "SELECT COUNT(*) FROM media_items WHERE mime_type LIKE 'video/%' AND status IN ('image_reviewed', 'excluded')",
                 [],
                 |r| r.get(0),
             )

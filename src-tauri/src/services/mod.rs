@@ -3,6 +3,7 @@ pub mod date_enforcer;
 pub mod event_grouper;
 pub mod exiftool;
 pub mod file_organizer;
+pub mod image_review;
 pub mod runtime_log;
 pub mod settings;
 pub mod test_fixtures;
