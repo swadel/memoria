@@ -9,7 +9,7 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(0.90);
     let mut stmt = conn.prepare(
-        "SELECT id, filename, COALESCE(file_size, 0), COALESCE(mime_type, ''), COALESCE(current_path, '')
+        "SELECT id, filename, COALESCE(file_size, 0), COALESCE(mime_type, ''), COALESCE(current_path, ''), COALESCE(width, 0), COALESCE(height, 0)
          FROM media_items WHERE status IN ('downloaded', 'metadata_extracted', 'classified')",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -19,11 +19,13 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
             row.get::<_, i64>(2)?,
             row.get::<_, String>(3)?,
             row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, i64>(6)?,
         ))
     })?;
 
     for row in rows {
-        let (id, filename, file_size, mime_type, current_path) = row?;
+        let (id, filename, file_size, mime_type, current_path, width, height) = row?;
         let lower = filename.to_ascii_lowercase();
 
         let (classification, source, raw, review_reason, review_reason_details) = if lower.ends_with(".gif") {
@@ -41,6 +43,21 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
                 None,
                 Some("screenshot".to_string()),
                 Some(serde_json::json!({"reason":"screenshot","filename": filename}).to_string()),
+            )
+        } else if is_probable_screenshot_shape(width, height, &mime_type) {
+            (
+                "review".to_string(),
+                "rule".to_string(),
+                None,
+                Some("screenshot".to_string()),
+                Some(
+                    serde_json::json!({
+                        "reason":"screenshot_like_aspect_ratio",
+                        "width": width,
+                        "height": height
+                    })
+                    .to_string(),
+                ),
             )
         } else if mime_type.contains("image") && file_size < 50_000 {
             (
@@ -95,6 +112,22 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn is_probable_screenshot_shape(width: i64, height: i64, mime_type: &str) -> bool {
+    if !mime_type.to_ascii_lowercase().starts_with("image/") {
+        return false;
+    }
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    let short = width.min(height) as f64;
+    let long = width.max(height) as f64;
+    if long < 1500.0 {
+        return false;
+    }
+    let ratio = short / long;
+    ratio <= 0.58
 }
 
 #[cfg(test)]
