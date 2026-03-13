@@ -68,6 +68,7 @@ export function App() {
   const [lightbox, setLightbox] = useState<{ items: MediaItem[]; index: number } | null>(null);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
   const [toolHealth, setToolHealth] = useState<ToolHealth | null>(null);
+  const [thumbVersion, setThumbVersion] = useState(0);
   const [pipelineStages, setPipelineStages] = useState<Record<PipelineStage, PipelineStageState>>({
     index: "idle",
     classify: "idle",
@@ -205,6 +206,7 @@ export function App() {
       await startDownloadSession({ workingDirectory, outputDirectory });
       setMessage("Local media indexed from working directory.");
       await refreshAll();
+      setThumbVersion((v) => v + 1);
       setStageState("index", "completed");
     } catch (err) {
       setMessage(`Indexing failed: ${String(err)}`);
@@ -222,6 +224,7 @@ export function App() {
       await runClassification();
       setMessage("Classification complete.");
       await refreshAll();
+      setThumbVersion((v) => v + 1);
       setStageState("classify", "completed");
     } catch (err) {
       setMessage(`Classification failed: ${String(err)}`);
@@ -238,6 +241,7 @@ export function App() {
       setSelectedReviewIds([]);
       setMessage(`Applied '${action}' to ${selectedReviewIds.length} items.`);
       await refreshAll();
+      setThumbVersion((v) => v + 1);
     } catch (err) {
       setMessage(`Review action failed: ${String(err)}`);
     }
@@ -258,6 +262,7 @@ export function App() {
       setSelectedReviewIds([]);
       setMessage(`Confirmed keep for duplicate cluster ${selected.duplicateClusterId}.`);
       await refreshAll();
+      setThumbVersion((v) => v + 1);
     } catch (err) {
       setMessage(`Confirm duplicate keep failed: ${String(err)}`);
     }
@@ -271,6 +276,7 @@ export function App() {
       await runEventGrouping();
       setMessage("Grouping generated.");
       await refreshAll();
+      setThumbVersion((v) => v + 1);
       setStageState("group", "completed");
     } catch (err) {
       setMessage(`Grouping failed: ${String(err)}`);
@@ -287,6 +293,7 @@ export function App() {
       await finalizeOrganization();
       setMessage("Organization finalized.");
       await refreshAll();
+      setThumbVersion((v) => v + 1);
       setStageState("finalize", "completed");
     } catch (err) {
       setMessage(`Finalize failed: ${String(err)}`);
@@ -311,6 +318,7 @@ export function App() {
         finalize: "idle"
       });
       await refreshAll();
+      setThumbVersion((v) => v + 1);
       if (result.deletedGeneratedFiles) {
         setMessage(`Session reset. Removed ${result.removedDirectories.length} generated directories.`);
       } else {
@@ -555,6 +563,7 @@ export function App() {
               <ReviewItemCard
                 key={item.id}
                 item={item}
+                thumbVersion={thumbVersion}
                 selectedReviewIds={selectedReviewIds}
                 setSelectedReviewIds={setSelectedReviewIds}
                 onOpenPreview={(i) => openLightbox([i], i)}
@@ -581,7 +590,7 @@ export function App() {
                         <img
                           className="thumbPreview"
                           data-testid={`review-thumb-${item.id}`}
-                          src={getReviewThumbnailUrl(item)}
+                          src={getReviewThumbnailUrl(item, thumbVersion)}
                           alt={item.filename}
                           onClick={() => openLightbox(cluster.items, item)}
                           onError={(e) => {
@@ -591,7 +600,7 @@ export function App() {
                               return;
                             }
                             img.dataset.fallbackApplied = "1";
-                            img.src = getReviewOriginalUrl(item);
+                            img.src = getReviewOriginalUrl(item, thumbVersion);
                           }}
                         />
                         <strong>{item.filename}</strong>
@@ -950,7 +959,7 @@ export function App() {
             <img
               className="lightboxImage"
               data-testid="lightbox-image"
-              src={getReviewOriginalUrl(lightboxCurrent)}
+              src={getReviewOriginalUrl(lightboxCurrent, thumbVersion)}
               alt={lightboxCurrent.filename}
             />
             <div className="muted" style={{ marginTop: 8 }}>
@@ -1023,11 +1032,13 @@ function pipelineButtonClass(state: PipelineStageState): string {
 
 function ReviewItemCard({
   item,
+  thumbVersion,
   selectedReviewIds,
   setSelectedReviewIds,
   onOpenPreview
 }: {
   item: MediaItem;
+  thumbVersion: number;
   selectedReviewIds: number[];
   setSelectedReviewIds: React.Dispatch<React.SetStateAction<number[]>>;
   onOpenPreview: (item: MediaItem) => void;
@@ -1037,7 +1048,7 @@ function ReviewItemCard({
       <img
         className="thumbPreview"
         data-testid={`review-thumb-${item.id}`}
-        src={getReviewThumbnailUrl(item)}
+        src={getReviewThumbnailUrl(item, thumbVersion)}
         alt={item.filename}
         onClick={() => onOpenPreview(item)}
         onError={(e) => {
@@ -1047,7 +1058,7 @@ function ReviewItemCard({
             return;
           }
           img.dataset.fallbackApplied = "1";
-          img.src = getReviewOriginalUrl(item);
+          img.src = getReviewOriginalUrl(item, thumbVersion);
         }}
       />
       <label className="row" htmlFor={`review-select-${item.id}`}>
@@ -1080,27 +1091,31 @@ function extractDuplicateRank(details: string | null): number {
   }
 }
 
-function getReviewThumbnailUrl(item: MediaItem): string {
+function getReviewThumbnailUrl(item: MediaItem, version: number): string {
   const p = item.currentPath;
   const idx = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
-  if (idx < 0) return getReviewOriginalUrl(item);
+  if (idx < 0) return getReviewOriginalUrl(item, version);
   const sep = p[idx];
   const dir = p.slice(0, idx);
   const thumb = `${dir}${sep}.thumbnails${sep}${item.id}.jpg`;
-  return safeConvertFileSrc(thumb);
+  return withCacheBust(safeConvertFileSrc(thumb), version);
 }
 
-function getReviewOriginalUrl(item: MediaItem): string {
-  return safeConvertFileSrc(item.currentPath);
+function getReviewOriginalUrl(item: MediaItem, version: number): string {
+  return withCacheBust(safeConvertFileSrc(item.currentPath), version);
 }
 
 function safeConvertFileSrc(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
   try {
-    return convertFileSrc(normalized);
+    return convertFileSrc(path);
   } catch {
+    const normalized = path.replace(/\\/g, "/");
     return /^[a-zA-Z]:\//.test(normalized) ? `file:///${normalized}` : `file://${normalized}`;
   }
+}
+
+function withCacheBust(url: string, version: number): string {
+  return `${url}${url.includes("?") ? "&" : "?"}v=${version}`;
 }
 
 function getThumbFallbackDataUrl(filename: string): string {
