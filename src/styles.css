@@ -1,7 +1,7 @@
 :root {
-  font-family: "SF Pro Text", "SF Pro Display", "Segoe UI Variable Text", "Segoe UI", "Inter", system-ui, sans-serif;
+  font-family: "Segoe UI Variable", "Inter", "Segoe UI", system-ui, sans-serif;
   color: #1d1d1f;
-  background: #f5f5f7;
+  background: #f8fafc;
 }
 
 * {
@@ -12,16 +12,16 @@ body {
   margin: 0;
   overflow-x: hidden;
   background:
-    radial-gradient(1000px 500px at 15% -20%, rgba(180, 208, 255, 0.5) 0%, transparent 55%),
-    radial-gradient(900px 450px at 100% 0%, rgba(220, 235, 255, 0.5) 0%, transparent 60%),
-    #f5f5f7;
+    radial-gradient(1000px 500px at 15% -20%, rgba(180, 208, 255, 0.38) 0%, transparent 55%),
+    radial-gradient(900px 450px at 100% 0%, rgba(220, 235, 255, 0.35) 0%, transparent 60%),
+    #f8fafc;
 }
 
 .layout {
   width: 100%;
   min-height: 100vh;
   margin: 0;
-  padding: 20px 22px 40px;
+  padding: 6px 22px 40px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -30,9 +30,24 @@ body {
 .appShellHeader {
   position: sticky;
   top: 0;
-  z-index: 8;
-  backdrop-filter: blur(8px);
+  z-index: 20;
+  backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.7);
   padding-bottom: 4px;
+}
+
+.globalProgressTrack {
+  height: 1px;
+  width: 100%;
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.globalProgressFill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--petal-blue), var(--petal-purple));
+  transition: width 220ms ease;
 }
 
 .appShellContent {
@@ -47,13 +62,54 @@ body {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  border-radius: 16px;
+  padding: 10px 12px;
+}
+
+.appBrand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.appLogo {
+  position: relative;
+  width: 40px;
+  height: 40px;
+}
+
+.appLogoPetal {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  filter: blur(0.2px);
+  opacity: 0.82;
+}
+
+.appLogoPetalBlue {
+  background: var(--petal-blue);
+  left: 2px;
+  top: 10px;
+}
+
+.appLogoPetalOrange {
+  background: var(--petal-orange);
+  left: 15px;
+  top: 2px;
+}
+
+.appLogoPetalPurple {
+  background: var(--petal-purple);
+  left: 15px;
+  top: 17px;
 }
 
 .title {
   margin: 0;
   font-size: 28px;
-  font-weight: 620;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: -0.035em;
 }
 
 .subtitle {
@@ -76,12 +132,24 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 6px 8px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.84);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.05);
   overflow-x: auto;
+  flex: 1;
+}
+
+.workflowHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 14px;
+  padding: 6px;
+  border: 1px solid transparent;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+}
+
+.workflowHeaderAction {
+  flex: 0 0 auto;
 }
 
 .workflowStepWrap {
@@ -94,59 +162,100 @@ body {
 .workflowStep {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   border-radius: 999px;
-  padding: 5px 10px;
-  border: 1px solid transparent;
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
   font-size: 12px;
+  background: rgba(255, 255, 255, 0.74);
+  color: #1f2937;
 }
 
-.workflowStepIndex {
-  width: 18px;
-  height: 18px;
+.workflowStep:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.workflowStep:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.workflowStepPetal {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+.workflowStepPetalDot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
+  opacity: 0.9;
+}
+
+.workflowStepPetalDotA {
+  left: 0;
+  top: 3px;
+}
+
+.workflowStepPetalDotB {
+  right: 0;
+  top: 0;
+}
+
+.workflowStepPetalDotC {
+  right: 0;
+  bottom: 0;
 }
 
 .workflowStepLabel {
-  font-weight: 560;
+  font-weight: 600;
 }
 
 .workflowStepComplete {
-  background: #ecfdf3;
+  background: rgba(236, 253, 243, 0.9);
   color: #0a7a32;
-  border-color: #b7f0ca;
+  border-color: #86efac;
 }
 
-.workflowStepComplete .workflowStepIndex {
+.workflowStepComplete .workflowStepPetalDotA {
   background: #22c55e;
-  color: #fff;
+}
+
+.workflowStepComplete .workflowStepPetalDotB {
+  background: #4ade80;
+}
+
+.workflowStepComplete .workflowStepPetalDotC {
+  background: #16a34a;
 }
 
 .workflowStepCurrent {
-  background: #e6f1ff;
-  color: #005bb5;
-  border-color: #abd2ff;
+  background: rgba(219, 234, 254, 0.94);
+  color: #1d4ed8;
+  border-color: var(--petal-blue);
+  box-shadow: 0 0 0 1px rgba(147, 197, 253, 0.55), 0 0 14px rgba(147, 197, 253, 0.4);
 }
 
-.workflowStepCurrent .workflowStepIndex {
-  background: #0a6de3;
-  color: #fff;
+.workflowStepCurrent .workflowStepPetalDotA,
+.workflowStepCurrent .workflowStepPetalDotB,
+.workflowStepCurrent .workflowStepPetalDotC {
+  background: var(--petal-blue);
 }
 
 .workflowStepPending {
-  background: #f8f8fa;
-  color: #6b7280;
-  border-color: #e5e7eb;
+  background: rgba(248, 250, 252, 0.8);
+  color: #64748b;
+  border-color: #cbd5e1;
 }
 
-.workflowStepPending .workflowStepIndex {
-  background: #e5e7eb;
-  color: #4b5563;
+.workflowStepPending .workflowStepPetalDotA,
+.workflowStepPending .workflowStepPetalDotB,
+.workflowStepPending .workflowStepPetalDotC {
+  background: #cbd5e1;
 }
 
 .workflowStepConnector {
@@ -155,23 +264,11 @@ body {
   background: #d1d5db;
 }
 
-.tabStrip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px;
-  border-radius: 14px;
-  width: 100%;
-  background: rgba(255, 255, 255, 0.84);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.05);
-}
-
 .tab {
   border-radius: 10px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: #4b5563;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.82);
+  color: #334155;
   padding: 7px 12px;
   transition: all 0.2s ease;
 }
@@ -189,11 +286,11 @@ body {
 
 .card {
   background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 18px;
+  border: 1px solid transparent;
+  border-radius: 16px;
   padding: 16px;
   backdrop-filter: blur(14px);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
 }
 
 .pageHeader {
@@ -256,7 +353,7 @@ button {
 }
 
 button:hover {
-  transform: translateY(-1px);
+  transform: translateY(-0.5px);
 }
 
 .primaryBtn {
@@ -353,7 +450,7 @@ button:hover {
 
 .dateApprovalGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(560px, 1fr));
   gap: 14px;
 }
 
@@ -364,10 +461,11 @@ button:hover {
 }
 
 .item {
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  border: 1px solid transparent;
   border-radius: 14px;
   padding: 12px;
-  background: rgba(255, 255, 255, 0.94);
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.07);
 }
 
 .reviewToolbar {
@@ -399,6 +497,23 @@ button:hover {
   gap: 10px;
 }
 
+.eventGroupCoverPlaceholder {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  background: linear-gradient(160deg, rgba(147, 197, 253, 0.28), rgba(192, 132, 252, 0.22), rgba(253, 186, 116, 0.28));
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.eventGroupFlowerLogo {
+  width: 36px;
+  height: 36px;
+}
+
 .eventGroupOpenButton {
   text-align: left;
   border: none;
@@ -419,9 +534,11 @@ button:hover {
   max-height: 76vh;
   overflow-y: auto;
   overflow-x: hidden;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid transparent;
   border-radius: 12px;
   padding: 8px 0;
+  background: #f8fafc;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.08);
 }
 
 .eventVirtualRow {
@@ -430,7 +547,7 @@ button:hover {
 
 .eventThumbCard {
   position: relative;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid transparent;
   border-radius: 14px;
   padding: 8px;
   background: #ffffff;
@@ -462,6 +579,171 @@ button:hover {
   aspect-ratio: 4 / 3;
   object-fit: cover;
   border-radius: 10px;
+}
+
+.mediaTile {
+  position: relative;
+  border: none;
+  border-radius: 14px;
+  padding: 0;
+  overflow: hidden;
+  background: #0f172a;
+}
+
+.mediaTileSelected {
+  box-shadow: 0 0 0 2px rgba(147, 197, 253, 0.95);
+}
+
+.mediaTileOpen {
+  border: none;
+  padding: 0;
+  width: 100%;
+  background: transparent;
+  display: block;
+}
+
+.mediaTileImage {
+  width: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.mediaTileImageSquare {
+  aspect-ratio: 1 / 1;
+}
+
+.mediaTileImageVideo,
+.mediaTileVideoAsset {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.mediaTileOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 8px;
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.4) 0%, rgba(2, 6, 23, 0) 38%, rgba(2, 6, 23, 0.58) 100%);
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+
+.mediaTile:hover .mediaTileOverlay,
+.mediaTileSelected .mediaTileOverlay {
+  opacity: 1;
+}
+
+.mediaTileOverlayTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.mediaTileOverlayBottom {
+  color: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mediaTileMeta {
+  color: rgba(248, 250, 252, 0.85);
+  font-size: 11px;
+}
+
+.mediaTileBadges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.mediaTileBadge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  background: rgba(147, 197, 253, 0.26);
+  color: #1e3a8a;
+}
+
+.mediaTileBadgeBest {
+  background: rgba(192, 132, 252, 0.28);
+  color: #6b21a8;
+}
+
+.mediaTileIconButton {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(15, 23, 42, 0.46);
+  color: #f8fafc;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  pointer-events: auto;
+}
+
+.mediaTileIconButtonDanger {
+  color: #fecaca;
+}
+
+.mediaTileDuration {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.6);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  z-index: 2;
+}
+
+.mediaTilePlayGlyph,
+.mediaTilePlayGlyphStatic {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 22px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+.mediaTilePlayGlyphStatic {
+  font-size: 28px;
+}
+
+.floatingSelectionBar {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.8);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  z-index: 60;
+}
+
+.selectionBarButton {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  background: rgba(30, 41, 59, 0.8);
+  color: #f8fafc;
+  padding: 8px 12px;
 }
 
 .eventThumbMeta {
@@ -508,14 +790,122 @@ button:hover {
   gap: 10px;
 }
 
+.dateApprovalCardGrid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr);
+  gap: 12px;
+}
+
 .dateMetaStack {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
+.dateSuggestedLabel {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.dateSuggestedValue {
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+}
+
+.dateConfidenceBadge {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+}
+
+.dateConfidenceHigh {
+  background: rgba(147, 197, 253, 0.42);
+  color: #1e3a8a;
+}
+
+.dateConfidenceMedium {
+  background: rgba(253, 186, 116, 0.38);
+  color: #92400e;
+}
+
+.dateConfidenceLow {
+  background: rgba(192, 132, 252, 0.4);
+  color: #6b21a8;
+}
+
+.dateWhyButton {
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.dateWhyTooltip {
+  font-size: 12px;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
 .dateActionRow {
   justify-content: space-between;
+}
+
+.pageTransition {
+  animation: fadeSlideIn 220ms ease;
+}
+
+.emptyStateSurface {
+  position: relative;
+  min-height: 170px;
+  border-radius: 14px;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.emptyStateFlower {
+  position: absolute;
+  width: 130px;
+  height: 130px;
+  opacity: 0.18;
+  filter: saturate(0.9);
+}
+
+.emptyStateMessage {
+  position: relative;
+  z-index: 1;
+  font-size: 15px;
+  font-weight: 560;
+  color: #334155;
+}
+
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pageTransition {
+    animation: none;
+  }
 }
 
 .truncateOneLine {
@@ -552,15 +942,15 @@ button:hover {
 }
 
 .ok {
-  color: #0a7a32;
+  color: #1e3a8a;
 }
 
 .warn {
-  color: #9a6700;
+  color: #c2410c;
 }
 
 .danger {
-  color: #b42318;
+  color: #6b21a8;
 }
 
 .statsGrid {
@@ -594,9 +984,24 @@ button:hover {
 
 .queueSummaryCard {
   border-radius: 14px;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  border: 1px solid transparent;
   background: #ffffff;
   padding: 12px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.07);
+}
+
+.mediaTile,
+.eventThumbCard,
+.eventGroupCard,
+.queueSummaryCard {
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.mediaTile:hover,
+.eventThumbCard:hover,
+.eventGroupCard:hover,
+.queueSummaryCard:hover {
+  transform: translateY(-2px);
 }
 
 .queueSummaryValue {

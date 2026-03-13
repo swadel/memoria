@@ -1,0 +1,15 @@
+:root {
+  --petal-blue: #93c5fd;
+  --petal-orange: #fdba74;
+  --petal-purple: #c084fc;
+}
+
+.mica-surface {
+  backdrop-filter: blur(12px);
+  background: linear-gradient(
+    180deg,
+    rgba(248, 250, 252, 0.72),
+    rgba(255, 255, 255, 0.62)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.48);
+}

@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppShell } from "./components/AppShell";
 import { PageHeader } from "./components/PageHeader";
@@ -326,18 +326,6 @@ export function App() {
     }
   }
 
-  const imagePhaseLabel = useMemo(
-    () => (stats.imageReview > 0 ? `2) Image Review (${stats.imageReview} flagged)` : "2) Image Review"),
-    [stats.imageReview]
-  );
-  const videoPhaseLabel = useMemo(
-    () => (stats.videoFlagged > 0 ? `3) Video Review (${stats.videoFlagged} flagged)` : "3) Video Review"),
-    [stats.videoFlagged]
-  );
-  const datePhaseLabel = useMemo(
-    () => (stats.dateNeedsReview > 0 ? `4) Date Enforcement (${stats.dateNeedsReview} pending)` : "4) Date Enforcement"),
-    [stats.dateNeedsReview]
-  );
   const dashboardSummary = useMemo(
     () =>
       `${stats.imageReview} images, ${stats.videoFlagged} videos, ${stats.dateNeedsReview} dates and ${groups.length} groups currently in review queues.`,
@@ -378,6 +366,82 @@ export function App() {
       disabled: busyAction !== null
     };
   }, [stats.total, stats.imagePhaseState, stats.videoPhaseState, stats.dateNeedsReview, busyAction]);
+  const workflowSteps = useMemo(() => {
+    const states = deriveWorkflowStepStates(pipelineStages, tab);
+    const stateById = Object.fromEntries(states.map((step) => [step.id, step.state])) as Record<PipelineStage, WorkflowStepState>;
+    return [
+      {
+        id: "index",
+        label: "Index",
+        state: stateById.index,
+        testId: "tab-dashboard",
+        disabled: busyAction !== null,
+        onClick: () => {
+          if (stats.total === 0) {
+            void onStart();
+            return;
+          }
+          setTab("dashboard");
+        }
+      },
+      {
+        id: "image",
+        label: "Image Review",
+        state: stateById.image,
+        testId: "tab-images",
+        disabled: busyAction !== null || stats.total === 0,
+        onClick: () => {
+          if (stats.total > 0 && stats.imagePhaseState !== "complete" && stats.imageReview === 0) {
+            void onRunImageReviewScan();
+            return;
+          }
+          setTab("images");
+        }
+      },
+      {
+        id: "video",
+        label: "Video Review",
+        state: stateById.video,
+        testId: "tab-videos",
+        disabled: busyAction !== null || stats.imagePhaseState !== "complete",
+        onClick: () => setTab("videos")
+      },
+      {
+        id: "date",
+        label: "Date Approval",
+        state: stateById.date,
+        testId: "tab-dates",
+        disabled: busyAction !== null || stats.videoPhaseState !== "complete",
+        onClick: () => {
+          void onRunDateEnforcement();
+        }
+      },
+      {
+        id: "group",
+        label: "Event Groups",
+        state: stateById.group,
+        testId: "tab-events",
+        disabled: busyAction !== null || stats.dateNeedsReview > 0 || stats.videoPhaseState !== "complete",
+        onClick: () => {
+          void onRunGrouping();
+          setTab("events");
+        }
+      },
+      {
+        id: "finalize",
+        label: "Finalize",
+        state: stateById.finalize,
+        disabled: busyAction !== null || stats.dateNeedsReview > 0 || (stats.videoTotal > 0 && stats.videoPhaseState !== "complete"),
+        onClick: () => {
+          void onFinalize();
+        }
+      }
+    ];
+  }, [pipelineStages, tab, busyAction, stats.total, stats.imagePhaseState, stats.imageReview, stats.videoPhaseState, stats.dateNeedsReview, stats.videoTotal]);
+  const globalProgressPct = useMemo(() => {
+    const completeCount = workflowSteps.filter((step) => step.state === "complete").length;
+    return (completeCount / 6) * 100;
+  }, [workflowSteps]);
 
   const normalizedGroupNames = useMemo(() => new Set(groups.map((group) => normalizeName(group.name))), [groups]);
   const activeGroup = useMemo(
@@ -505,54 +569,18 @@ export function App() {
       title="Memoria"
       subtitle="Local Media Organizer"
       status={message || "Ready"}
-      stepper={<WorkflowStepper steps={deriveWorkflowStepStates(pipelineStages, tab)} />}
-      navigation={
-        <div className="tabStrip" data-testid="tab-strip">
-          <button data-testid="tab-dashboard" className={tab === "dashboard" ? "tab active" : "tab"} onClick={() => setTab("dashboard")}>
-            Dashboard
-          </button>
-          <button
-            data-testid="tab-images"
-            className={tab === "images" ? "tab active" : "tab"}
-            onClick={() => setTab("images")}
-            disabled={stats.total === 0}
-          >
-            Image Review {stats.imageFlaggedPending > 0 ? `(${stats.imageFlaggedPending})` : ""}
-          </button>
-          <button
-            data-testid="tab-videos"
-            className={tab === "videos" ? "tab active" : "tab"}
-            onClick={() => setTab("videos")}
-            disabled={stats.imagePhaseState !== "complete"}
-          >
-            Video Review {stats.videoUnreviewedFlagged > 0 ? `(${stats.videoUnreviewedFlagged})` : ""}
-          </button>
-          <button
-            data-testid="tab-dates"
-            className={tab === "dates" ? "tab active" : "tab"}
-            onClick={() => setTab("dates")}
-            disabled={stats.videoPhaseState !== "complete"}
-          >
-            Date Approval
-          </button>
-          <button
-            data-testid="tab-events"
-            className={tab === "events" ? "tab active" : "tab"}
-            onClick={() => setTab("events")}
-            disabled={stats.dateNeedsReview > 0 || stats.videoPhaseState !== "complete"}
-          >
-            Event Groups
-          </button>
-          <button data-testid="tab-settings" className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>
-            Settings
-          </button>
-        </div>
+      progress={globalProgressPct}
+      stepper={<WorkflowStepper steps={workflowSteps} />}
+      settingsAction={
+        <button data-testid="tab-settings" className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>
+          Settings
+        </button>
       }
     >
 
       {tab === "dashboard" && (
         <>
-          <div className="card dashboardHero">
+          <div className="card dashboardHero pageTransition">
             <PageHeader
               title="Workflow Overview"
               summary={dashboardSummary}
@@ -568,9 +596,12 @@ export function App() {
               <QueueSummaryCard title="Dates Needing Approval" value={stats.dateNeedsReview} subtitle="Awaiting date approval actions" />
               <QueueSummaryCard title="Groups Awaiting Review" value={groups.length} subtitle="Event groups ready for curation" />
             </div>
+            {stats.imageReview === 0 && stats.videoFlagged === 0 && stats.dateNeedsReview === 0 && groups.length === 0 ? (
+              <EmptyStateBanner />
+            ) : null}
           </div>
 
-          <div className="statsGrid" data-testid="dashboard-stats-grid">
+          <div className="statsGrid pageTransition" data-testid="dashboard-stats-grid">
             <StatCard label="Total" value={stats.total} testId="stat-total" />
             <StatCard label="Indexed" value={stats.indexed} testId="stat-indexed" />
             <StatCard label="Image Review" value={stats.imageReview} testId="stat-image-review" />
@@ -580,112 +611,59 @@ export function App() {
             <StatCard label="Grouped" value={stats.grouped} testId="stat-grouped" />
             <StatCard label="Filed" value={stats.filed} testId="stat-filed" />
           </div>
-
-          <div className="card" data-testid="dashboard-pipeline-card">
-            <PageHeader title="Run Pipeline" summary="Each phase unlocks the next; resume from any highlighted step." />
-            <div className="row">
-              <button
-                data-testid="pipeline-index"
-                className={pipelineButtonClass(pipelineStages.index)}
-                disabled={busyAction !== null}
-                onClick={onStart}
-              >
-                {busyAction === "ingest" ? "Indexing..." : "1) Index Media"}
-              </button>
-              <button
-                data-testid="pipeline-image-review"
-                className={pipelineButtonClass(pipelineStages.image)}
-                disabled={busyAction !== null || stats.total === 0}
-                onClick={onRunImageReviewScan}
-              >
-                {busyAction === "image-review-scan" ? "Scanning..." : imagePhaseLabel}
-              </button>
-              <button
-                data-testid="pipeline-video-review"
-                className={pipelineButtonClass(pipelineStages.video)}
-                disabled={busyAction !== null || stats.imagePhaseState !== "complete"}
-                onClick={() => setTab("videos")}
-              >
-                {videoPhaseLabel}
-              </button>
-              <button
-                data-testid="pipeline-date-enforcement"
-                className={pipelineButtonClass(pipelineStages.date)}
-                disabled={busyAction !== null || stats.videoPhaseState !== "complete"}
-                onClick={onRunDateEnforcement}
-              >
-                {busyAction === "date-enforcement" ? "Enforcing..." : datePhaseLabel}
-              </button>
-              <button
-                data-testid="pipeline-group"
-                className={pipelineButtonClass(pipelineStages.group)}
-                disabled={busyAction !== null || stats.dateNeedsReview > 0 || stats.videoPhaseState !== "complete"}
-                onClick={onRunGrouping}
-              >
-                {busyAction === "group" ? "Grouping..." : "5) Group"}
-              </button>
-              <button
-                data-testid="pipeline-finalize"
-                className={pipelineButtonClass(pipelineStages.finalize)}
-                disabled={busyAction !== null || stats.dateNeedsReview > 0 || (stats.videoTotal > 0 && stats.videoPhaseState !== "complete")}
-                onClick={onFinalize}
-              >
-                {busyAction === "finalize" ? "Finalizing..." : "6) Finalize"}
-              </button>
-            </div>
-            <div className="muted" data-testid="pipeline-phase-help">
-              {"Pipeline order: Index -> Image Review -> Video Review -> Date Enforcement -> Group -> Finalize."}
-            </div>
-            <div className="row" style={{ justifyContent: "flex-end", marginTop: 6 }}>
-              <button
-                data-testid="pipeline-reset-session"
-                className="textBtn"
-                disabled={busyAction !== null}
-                onClick={() => {
-                  setResetError("");
-                  setShowResetPrompt(true);
-                }}
-              >
-                {busyAction === "reset" ? "Resetting..." : "Reset Session"}
-              </button>
-            </div>
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <button
+              data-testid="pipeline-reset-session"
+              className="textBtn"
+              disabled={busyAction !== null}
+              onClick={() => {
+                setResetError("");
+                setShowResetPrompt(true);
+              }}
+            >
+              {busyAction === "reset" ? "Resetting..." : "Reset Session"}
+            </button>
           </div>
         </>
       )}
 
       {tab === "dates" && (
-        <div className="card" data-testid="date-approval-card">
+        <div className="card pageTransition" data-testid="date-approval-card">
           <PageHeader
             title="Date Approval"
             summary={`${dateItems.length} items are awaiting approval. Confirm, edit, or skip each date estimate.`}
           />
-          <div className="dateApprovalGrid">
-            {dateItems.map((item) => (
-              <DateCard
-                key={item.mediaItemId}
-                item={item}
-                onApply={async (date) => {
-                  try {
-                    await applyDateApproval(item.mediaItemId, date);
-                    await refreshAll();
-                    setMessage(
-                      date
-                        ? `Approved date ${date} for ${item.filename}.`
-                        : `Skipped date approval for ${item.filename}.`
-                    );
-                  } catch (err) {
-                    setMessage(`Date approval failed for ${item.filename}: ${String(err)}`);
-                    throw err;
-                  }
-                }}
-              />
-            ))}
-          </div>
+          {dateItems.length === 0 ? (
+            <EmptyStateBanner />
+          ) : (
+            <div className="dateApprovalGrid">
+              {dateItems.map((item) => (
+                <DateCard
+                  key={item.mediaItemId}
+                  item={item}
+                  onApply={async (date) => {
+                    try {
+                      await applyDateApproval(item.mediaItemId, date);
+                      await refreshAll();
+                      setMessage(
+                        date
+                          ? `Approved date ${date} for ${item.filename}.`
+                          : `Skipped date approval for ${item.filename}.`
+                      );
+                    } catch (err) {
+                      setMessage(`Date approval failed for ${item.filename}: ${String(err)}`);
+                      throw err;
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {tab === "images" && (
-        <div className="card" data-testid="image-review-card">
+        <div className="card pageTransition" data-testid="image-review-card">
           <PageHeader
             title="Image Review"
             summary={`${imageItems.filter((item) => item.status !== "excluded").length} active images in review.`}
@@ -728,7 +706,7 @@ export function App() {
       )}
 
       {tab === "videos" && (
-        <div className="card" data-testid="video-review-card">
+        <div className="card pageTransition" data-testid="video-review-card">
           <PageHeader
             title="Video Review"
             summary={`${videoItems.filter((item) => item.status !== "excluded").length} active videos in this stage.`}
@@ -752,7 +730,7 @@ export function App() {
       )}
 
       {tab === "events" && (
-        <div className="card" data-testid="event-groups-card">
+        <div className="card pageTransition" data-testid="event-groups-card">
           <PageHeader
             title="Event Groups"
             summary={activeGroup ? `${activeGroup.itemCount} active items in this group.` : `${groups.length} groups in review.`}
@@ -883,7 +861,7 @@ export function App() {
       )}
 
       {tab === "settings" && (
-        <div className="card" data-testid="settings-card">
+        <div className="card pageTransition" data-testid="settings-card">
           <PageHeader title="Settings" summary="Manage directories, API keys, AI models, and dependency health." />
           <h4 className="settingsSectionTitle" data-testid="settings-section-tool-health">Dependency Health</h4>
           <div className="item" data-testid="settings-tool-health-card">
@@ -1186,19 +1164,6 @@ export function App() {
   );
 }
 
-function pipelineButtonClass(state: PipelineStageState): string {
-  switch (state) {
-    case "running":
-      return "stageBtn stageBtnRunning";
-    case "completed":
-      return "stageBtn stageBtnCompleted";
-    case "failed":
-      return "stageBtn stageBtnFailed";
-    default:
-      return "stageBtn stageBtnIdle";
-  }
-}
-
 function StatCard({ label, value, danger, testId }: { label: string; value: number; danger?: boolean; testId?: string }) {
   return (
     <div className="card statCard" data-testid={testId}>
@@ -1222,6 +1187,7 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
   const [value, setValue] = useState(item.aiDate ?? "");
   const [thumbSrc, setThumbSrc] = useState<string>("");
   const [busyAction, setBusyAction] = useState<"approve" | "skip" | null>(null);
+  const [showWhy, setShowWhy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1253,26 +1219,46 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
     }
   }
 
+  const confidencePct = Math.round(item.confidence * 100);
+  const confidenceClass = confidencePct >= 80 ? "dateConfidenceHigh" : confidencePct >= 55 ? "dateConfidenceMedium" : "dateConfidenceLow";
+
   return (
     <div className="item dateItemCard" data-testid={`date-item-${item.mediaItemId}`}>
-      <img
-        className="dateThumb"
-        data-testid={`date-thumb-${item.mediaItemId}`}
-        src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)}
-        alt={item.filename}
-        onError={(e) => {
-          const img = e.currentTarget;
-          const fallback = getDateThumbFallbackDataUrl(item.filename);
-          if (img.src !== fallback) {
-            img.src = fallback;
-          }
-        }}
-      />
-      <div className="dateMetaStack">
-        <strong className="truncateOneLine">{item.filename}</strong>
-        <div className="muted">Current date: {item.currentDate ?? "(missing)"}</div>
-        <div className="muted">Suggested date: {item.aiDate ?? "(none)"} • Confidence {Math.round(item.confidence * 100)}%</div>
-        <div className="muted">{item.reasoning}</div>
+      <div className="dateApprovalCardGrid">
+        <img
+          className="dateThumb"
+          data-testid={`date-thumb-${item.mediaItemId}`}
+          src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)}
+          alt={item.filename}
+          onError={(e) => {
+            const img = e.currentTarget;
+            const fallback = getDateThumbFallbackDataUrl(item.filename);
+            if (img.src !== fallback) {
+              img.src = fallback;
+            }
+          }}
+        />
+        <div className="dateMetaStack">
+          <strong className="truncateOneLine">{item.filename}</strong>
+          <div className="muted">Current date: {item.currentDate ?? "(missing)"}</div>
+          <div className="dateSuggestedLabel">AI Suggested Date</div>
+          <div className="dateSuggestedValue">{item.aiDate ?? "(none)"}</div>
+          <div className="row">
+            <span className={`dateConfidenceBadge ${confidenceClass}`}>Confidence {confidencePct}%</span>
+            <button
+              type="button"
+              data-testid={`date-why-${item.mediaItemId}`}
+              className="dateWhyButton"
+              onMouseEnter={() => setShowWhy(true)}
+              onMouseLeave={() => setShowWhy(false)}
+              onFocus={() => setShowWhy(true)}
+              onBlur={() => setShowWhy(false)}
+            >
+              Why?
+            </button>
+          </div>
+          {showWhy ? <div className="dateWhyTooltip">{item.reasoning}</div> : null}
+        </div>
       </div>
       <div className="row dateActionRow">
         <input type="date" data-testid={`date-input-${item.mediaItemId}`} value={value} onChange={(e) => setValue(e.target.value)} />
@@ -1353,6 +1339,13 @@ function EventCard({
         data-testid={`event-open-${group.id}`}
         onClick={onOpen}
       >
+        <div className="eventGroupCoverPlaceholder" aria-hidden="true">
+          <span className="appLogo eventGroupFlowerLogo">
+            <span className="appLogoPetal appLogoPetalBlue" />
+            <span className="appLogoPetal appLogoPetalOrange" />
+            <span className="appLogoPetal appLogoPetalPurple" />
+          </span>
+        </div>
         <strong>{group.folderName}</strong>
       </button>
       <div className="muted">{group.itemCount} items</div>
@@ -1859,7 +1852,6 @@ function ImageReviewView({
   const [viewMode, setViewMode] = useState<"all" | "flagged" | "burst">("flagged");
   const [sortMode, setSortMode] = useState<"date" | "size" | "sharpness">("date");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
   const [previewById, setPreviewById] = useState<Record<number, string>>({});
   const [modalIndex, setModalIndex] = useState<number | null>(null);
   const [thumbs, setThumbs] = useState<Record<number, string>>({});
@@ -1985,32 +1977,9 @@ function ImageReviewView({
             <button data-testid="image-select-all-flagged" className="secondaryBtn" onClick={() => setSelectedIds(visibleItems.filter((i) => i.imageFlags.length > 0).map((i) => i.id))}>
               Select All Flagged
             </button>
-            <button data-testid="image-exclude-selected" className="secondaryBtn dangerBtn" disabled={selectedIds.length === 0} onClick={() => setShowBulkConfirm(true)}>
-              Exclude Selected
-            </button>
           </div>
         }
       />
-
-      {showBulkConfirm && selectedIds.length > 0 ? (
-        <div className="item" data-testid="image-bulk-confirm">
-          <div className="danger">Move {selectedIds.length} items to recycle? This will remove them from this group.</div>
-          <div className="row">
-            <button
-              data-testid="image-bulk-confirm-yes"
-              className="secondaryBtn"
-              onClick={() => {
-                void onExcludeSelected(selectedIds);
-                setSelectedIds([]);
-                setShowBulkConfirm(false);
-              }}
-            >
-              Confirm
-            </button>
-            <button data-testid="image-bulk-confirm-cancel" className="secondaryBtn" onClick={() => setShowBulkConfirm(false)}>Cancel</button>
-          </div>
-        </div>
-      ) : null}
 
       {viewMode === "burst" ? (
         <div data-testid="image-burst-groups-view">
@@ -2095,6 +2064,33 @@ function ImageReviewView({
         </div>
       ) : null}
 
+      {selectedIds.length > 0 && !showExcluded ? (
+        <FloatingSelectionBar>
+          <button
+            data-testid="image-exclude-selected"
+            className="selectionBarButton"
+            onClick={() => {
+              void onExcludeSelected(selectedIds);
+              setSelectedIds([]);
+            }}
+          >
+            Exclude Selected
+          </button>
+          <button
+            data-testid="image-move-selected"
+            className="selectionBarButton"
+            onClick={() => window.alert("Move to Group is available in Event Groups.")}
+          >
+            Move to Group
+          </button>
+          <button data-testid="image-cancel-selected" className="selectionBarButton" onClick={() => setSelectedIds([])}>
+            Cancel
+          </button>
+        </FloatingSelectionBar>
+      ) : null}
+
+      {baseItems.length === 0 ? <EmptyStateBanner /> : null}
+
       {modalItem ? (
         <div className="lightboxOverlay" data-testid="image-preview-modal-overlay" onClick={() => setModalIndex(null)}>
           <div className="lightboxCard" data-testid="image-preview-modal" onClick={(e) => e.stopPropagation()}>
@@ -2176,40 +2172,36 @@ function ImageCard({
   onRestore: () => void;
   muted: boolean;
 }) {
-  const [confirmExclude, setConfirmExclude] = useState(false);
   return (
-    <div className={selected ? "eventThumbCard selected" : "eventThumbCard"} data-testid={`image-item-${item.id}`} style={{ flex: "1 1 0", minWidth: 0, opacity: muted ? 0.65 : 1 }}>
-      <button data-testid={`image-open-${item.id}`} className="eventThumbPreviewButton" onClick={onOpen}>
-        <img className="eventThumbImage" src={thumbnail} alt={item.filename} style={{ width: "100%", height: THUMBNAIL_SIZE, objectFit: "cover" }} />
+    <div className={selected ? "mediaTile mediaTileSelected" : "mediaTile"} data-testid={`image-item-${item.id}`} style={{ flex: "1 1 0", minWidth: 0, opacity: muted ? 0.65 : 1 }}>
+      <button data-testid={`image-open-${item.id}`} className="mediaTileOpen" onClick={onOpen}>
+        <img className="mediaTileImage mediaTileImageSquare" src={thumbnail} alt={item.filename} />
       </button>
-      <div className="eventThumbMeta" style={{ padding: "6px 8px" }}>
-        <strong className="truncateOneLine" style={{ fontSize: 12 }}>{item.filename}</strong>
-        <div className="muted truncateOneLine" style={{ fontSize: 11 }}>{formatFileSize(item.fileSizeBytes)} • {item.dateTaken ?? "(missing date)"}</div>
-        <div className="row" style={{ flexWrap: "wrap" }}>
-          {item.imageFlags.includes("small_file") ? <span data-testid={`image-flag-small-${item.id}`} className="muted">small_file</span> : null}
-          {item.imageFlags.includes("blurry") ? <span data-testid={`image-flag-blurry-${item.id}`} className="muted">blurry</span> : null}
-          {item.imageFlags.includes("burst_shot") ? <span data-testid={`image-flag-burst-${item.id}`} className="muted">burst_shot</span> : null}
-          {item.isBurstPrimary ? <span data-testid={`image-flag-best-${item.id}`} className="ok">Best</span> : null}
+      <div className="mediaTileOverlay">
+        <div className="mediaTileOverlayTop">
+          <button data-testid={`image-select-${item.id}`} className="mediaTileIconButton" onClick={onToggle} aria-label={selected ? "Deselect" : "Select"}>
+            <IconCheckCircle filled={selected} />
+          </button>
+          {item.status === "excluded" ? (
+            <button data-testid={`image-restore-${item.id}`} className="mediaTileIconButton" onClick={onRestore} aria-label="Restore">
+              ↺
+            </button>
+          ) : (
+            <button data-testid={`image-exclude-${item.id}`} className="mediaTileIconButton mediaTileIconButtonDanger" onClick={onExclude} aria-label="Exclude">
+              <IconXCircle />
+            </button>
+          )}
         </div>
-      </div>
-      <div style={{ padding: "0 8px 8px" }} className="row">
-        {item.status === "excluded" ? (
-          <button data-testid={`image-restore-${item.id}`} className="secondaryBtn" onClick={onRestore}>Restore</button>
-        ) : confirmExclude ? (
-          <div data-testid={`image-exclude-confirm-${item.id}`} className="row">
-            <button data-testid={`image-exclude-confirm-yes-${item.id}`} className="secondaryBtn" onClick={onExclude}>Confirm</button>
-            <button data-testid={`image-exclude-confirm-cancel-${item.id}`} className="secondaryBtn" onClick={() => setConfirmExclude(false)}>Cancel</button>
+        <div className="mediaTileOverlayBottom">
+          <strong className="truncateOneLine">{item.filename}</strong>
+          <div className="mediaTileMeta truncateOneLine">{formatFileSize(item.fileSizeBytes)} • {item.dateTaken ?? "(missing date)"}</div>
+          <div className="mediaTileBadges">
+            {item.imageFlags.includes("small_file") ? <span data-testid={`image-flag-small-${item.id}`} className="mediaTileBadge">small_file</span> : null}
+            {item.imageFlags.includes("blurry") ? <span data-testid={`image-flag-blurry-${item.id}`} className="mediaTileBadge">blurry</span> : null}
+            {item.imageFlags.includes("burst_shot") ? <span data-testid={`image-flag-burst-${item.id}`} className="mediaTileBadge">burst_shot</span> : null}
+            {item.isBurstPrimary ? <span data-testid={`image-flag-best-${item.id}`} className="mediaTileBadge mediaTileBadgeBest">Best</span> : null}
           </div>
-        ) : (
-          <>
-            <button data-testid={`image-select-${item.id}`} className="eventThumbSelectButton" onClick={onToggle}>
-              {selected ? "Selected" : "Select"}
-            </button>
-            <button data-testid={`image-exclude-${item.id}`} className="secondaryBtn" onClick={() => setConfirmExclude(true)} style={{ borderColor: "#b91c1c", color: "#b91c1c" }}>
-              Exclude
-            </button>
-          </>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -2424,25 +2416,6 @@ function VideoReviewView({
             <button data-testid="video-select-all-filtered" className="secondaryBtn" onClick={() => setSelectedIds(filtered.map((item) => item.id))}>
               Select All Filtered
             </button>
-            {showExcluded ? (
-              <button
-                data-testid="video-restore-selected"
-                className="secondaryBtn"
-                disabled={selectedIds.length === 0}
-                onClick={() => void handleRestore(selectedIds)}
-              >
-                Restore Selected
-              </button>
-            ) : (
-              <button
-                data-testid="video-exclude-selected"
-                className="secondaryBtn dangerBtn"
-                disabled={selectedIds.length === 0}
-                onClick={() => void handleExclude(selectedIds)}
-              >
-                Exclude Selected
-              </button>
-            )}
           </div>
         }
       />
@@ -2498,39 +2471,47 @@ function VideoReviewView({
                     return (
                       <div
                         key={item.id}
-                        className={isSelected ? "eventThumbCard selected" : "eventThumbCard"}
+                        className={isSelected ? "mediaTile mediaTileVideo mediaTileSelected" : "mediaTile mediaTileVideo"}
                         data-testid={`video-item-${item.id}`}
                         data-flagged={flagged ? "true" : "false"}
-                        style={{ flex: "1 1 0", minWidth: 0, position: "relative", borderColor: flagged ? "#d97706" : undefined, background: flagged ? "#fffbeb" : undefined }}
+                        style={{ flex: "1 1 0", minWidth: 0, position: "relative" }}
                       >
                         {inlinePlayingId === item.id && previewSrc ? (
-                          <video data-testid={`video-inline-player-${item.id}`} src={previewSrc} autoPlay muted controls style={{ width: "100%", height: THUMBNAIL_SIZE, objectFit: "cover" }} />
+                          <video data-testid={`video-inline-player-${item.id}`} src={previewSrc} autoPlay muted controls className="mediaTileVideoAsset" />
                         ) : (
-                          <button data-testid={`video-open-${item.id}`} className="eventThumbPreviewButton" onClick={() => void handleOpen(item, startIndex + offset)}>
-                            <img className="eventThumbImage" src={thumbSrc} alt={item.filename} style={{ width: "100%", height: THUMBNAIL_SIZE, objectFit: "cover" }} />
-                            <span data-testid={`video-play-overlay-${item.id}`} className="eventThumbCheckmark" style={{ top: 10, right: 10 }}>▶</span>
+                          <button data-testid={`video-open-${item.id}`} className="mediaTileOpen" onClick={() => void handleOpen(item, startIndex + offset)}>
+                            <img className="mediaTileImage mediaTileImageVideo" src={thumbSrc} alt={item.filename} />
+                            <span data-testid={`video-play-overlay-${item.id}`} className="mediaTilePlayGlyph">▶</span>
                           </button>
                         )}
-                        <div className="eventThumbMeta" style={{ padding: "6px 8px" }}>
-                          <strong className="truncateOneLine" style={{ fontSize: 12, fontWeight: 500 }}>{item.filename}</strong>
-                          <div className="muted truncateOneLine" style={{ fontSize: 11 }}>{formatFileSize(item.fileSizeBytes)} • {formatDuration(item.durationSecs)}</div>
+                        <div className="mediaTileOverlay">
+                          <div className="mediaTileOverlayTop">
+                            <button
+                              data-testid={`video-select-${item.id}`}
+                              className="mediaTileIconButton"
+                              onClick={() => setSelectedIds((prev) => prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id])}
+                              aria-label={isSelected ? "Deselect" : "Select"}
+                            >
+                              <IconCheckCircle filled={isSelected} />
+                            </button>
+                            {showExcluded ? (
+                              <button data-testid={`video-restore-${item.id}`} className="mediaTileIconButton" onClick={() => void handleRestore([item.id])} aria-label="Restore">↺</button>
+                            ) : (
+                              <button data-testid={`video-exclude-${item.id}`} className="mediaTileIconButton mediaTileIconButtonDanger" onClick={() => void handleExclude([item.id])} aria-label="Exclude">
+                                <IconXCircle />
+                              </button>
+                            )}
+                          </div>
+                          <div className="mediaTileOverlayBottom">
+                            <strong className="truncateOneLine">{item.filename}</strong>
+                            <div className="mediaTileMeta truncateOneLine">{formatFileSize(item.fileSizeBytes)} • {formatDuration(item.durationSecs)}</div>
+                            {flagged ? <span className="mediaTileBadge">candidate</span> : null}
+                          </div>
                         </div>
-                        <div style={{ padding: "0 8px 8px" }} className="row">
-                          <button
-                            data-testid={`video-select-${item.id}`}
-                            className="eventThumbSelectButton"
-                            onClick={() => setSelectedIds((prev) => prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id])}
-                            style={{ width: "100%" }}
-                          >
-                            {isSelected ? "Selected" : "Select"}
-                          </button>
-                          {showExcluded ? (
-                            <button data-testid={`video-restore-${item.id}`} className="secondaryBtn" onClick={() => void handleRestore([item.id])}>Restore</button>
-                          ) : (
-                            <button data-testid={`video-exclude-${item.id}`} className="secondaryBtn" onClick={() => void handleExclude([item.id])}>Exclude</button>
-                          )}
-                        </div>
-                        {isSelected ? <div className="eventThumbCheckmark">✓</div> : null}
+                        <span className="mediaTileDuration">{formatDuration(item.durationSecs)}</span>
+                        {inlinePlayingId !== item.id ? (
+                          <span className="mediaTilePlayGlyphStatic">▶</span>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -2541,6 +2522,24 @@ function VideoReviewView({
           </div>
         </div>
       </div>
+
+      {selectedIds.length > 0 && !showExcluded ? (
+        <FloatingSelectionBar>
+          <button data-testid="video-exclude-selected" className="selectionBarButton" onClick={() => void handleExclude(selectedIds)}>
+            Exclude Selected
+          </button>
+          <button
+            data-testid="video-move-selected"
+            className="selectionBarButton"
+            onClick={() => window.alert("Move to Group is available in Event Groups.")}
+          >
+            Move to Group
+          </button>
+          <button data-testid="video-cancel-selected" className="selectionBarButton" onClick={() => setSelectedIds([])}>
+            Cancel
+          </button>
+        </FloatingSelectionBar>
+      ) : null}
 
       {!showExcluded ? (
         <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
@@ -2594,6 +2593,48 @@ function formatFileSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${bytes} B`;
+}
+
+function FloatingSelectionBar({ children }: { children: ReactNode }) {
+  return <div className="floatingSelectionBar">{children}</div>;
+}
+
+function IconCheckCircle({ filled }: { filled?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <circle
+        cx="12"
+        cy="12"
+        r="9"
+        fill={filled ? "rgba(34,197,94,0.9)" : "rgba(255,255,255,0.1)"}
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path d="M8.5 12.2l2.4 2.4 4.8-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconXCircle() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="rgba(255,255,255,0.1)" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function EmptyStateBanner() {
+  return (
+    <div className="emptyStateSurface" data-testid="empty-state-banner">
+      <span className="appLogo emptyStateFlower" aria-hidden="true">
+        <span className="appLogoPetal appLogoPetalBlue" />
+        <span className="appLogoPetal appLogoPetalOrange" />
+        <span className="appLogoPetal appLogoPetalPurple" />
+      </span>
+      <div className="emptyStateMessage">All caught up! Your library is looking great.</div>
+    </div>
+  );
 }
 
 function formatDuration(seconds: number): string {

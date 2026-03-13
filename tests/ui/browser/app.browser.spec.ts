@@ -8,12 +8,13 @@ test.describe("Memoria browser UI", () => {
   });
 
   test("dashboard uses reordered pipeline and updated tiles", async ({ page }) => {
-    await expect(page.getByTestId("pipeline-index")).toContainText("1) Index Media");
-    await expect(page.getByTestId("pipeline-image-review")).toContainText("2) Image Review");
-    await expect(page.getByTestId("pipeline-video-review")).toContainText("3) Video Review");
-    await expect(page.getByTestId("pipeline-date-enforcement")).toContainText("4) Date Enforcement");
-    await expect(page.getByTestId("pipeline-group")).toContainText("5) Group");
-    await expect(page.getByTestId("pipeline-finalize")).toContainText("6) Finalize");
+    await expect(page.getByTestId("tab-dashboard")).toContainText("Index");
+    await expect(page.getByTestId("tab-images")).toContainText("Image Review");
+    await expect(page.getByTestId("tab-videos")).toContainText("Video Review");
+    await expect(page.getByTestId("tab-dates")).toContainText("Date Approval");
+    await expect(page.getByTestId("tab-events")).toContainText("Event Groups");
+    await expect(page.getByTestId("workflow-step-finalize")).toContainText("Finalize");
+    await expect(page.getByTestId("dashboard-pipeline-card")).toHaveCount(0);
 
     await expect(page.getByTestId("stat-total")).toBeVisible();
     await expect(page.getByTestId("stat-indexed")).toBeVisible();

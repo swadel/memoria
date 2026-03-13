@@ -228,6 +228,8 @@ fn clear_pipeline_state(conn: &mut rusqlite::Connection) -> AnyResult<()> {
     delete_table_rows_if_exists(&tx, "media_items")?;
     delete_table_rows_if_exists(&tx, "event_groups")?;
     delete_table_rows_if_exists(&tx, "download_sessions")?;
+    clear_setting_if_exists(&tx, "image_review_phase_state")?;
+    clear_setting_if_exists(&tx, "video_review_phase_state")?;
     if table_exists(&tx, "media_items_old")? {
         tx.execute("DROP TABLE IF EXISTS media_items_old", [])?;
     }
@@ -262,6 +264,14 @@ fn delete_table_rows_if_exists(conn: &rusqlite::Connection, table_name: &str) ->
         return Ok(());
     }
     conn.execute(&format!("DELETE FROM {table_name}"), [])?;
+    Ok(())
+}
+
+fn clear_setting_if_exists(conn: &rusqlite::Connection, key: &str) -> AnyResult<()> {
+    if !table_exists(conn, "settings")? {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM settings WHERE key=?1", [key])?;
     Ok(())
 }
 
@@ -389,6 +399,18 @@ mod tests {
                 .as_deref(),
             Some(r"C:\Memoria\Output")
         );
+        assert_eq!(
+            db::get_setting(&conn, "image_review_phase_state")
+                .expect("image phase state")
+                .as_deref(),
+            None
+        );
+        assert_eq!(
+            db::get_setting(&conn, "video_review_phase_state")
+                .expect("video phase state")
+                .as_deref(),
+            None
+        );
 
         drop(conn);
         let _ = fs::remove_file(db_path);
@@ -429,6 +451,39 @@ mod tests {
         assert_eq!(media_count, 0);
         assert_eq!(group_count, 0);
         assert_eq!(audit_count, 0);
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn clear_pipeline_state_clears_pipeline_phase_state_settings() {
+        let db_path = temp_db_path();
+        let mut conn = init_db(&db_path).expect("init db");
+        db::set_setting(&conn, "image_review_phase_state", "complete").expect("seed image phase");
+        db::set_setting(&conn, "video_review_phase_state", "complete").expect("seed video phase");
+        db::set_setting(&conn, "output_directory", r"C:\Memoria\Output").expect("seed output");
+
+        clear_pipeline_state(&mut conn).expect("clear pipeline");
+
+        assert_eq!(
+            db::get_setting(&conn, "image_review_phase_state")
+                .expect("image phase after reset")
+                .as_deref(),
+            None
+        );
+        assert_eq!(
+            db::get_setting(&conn, "video_review_phase_state")
+                .expect("video phase after reset")
+                .as_deref(),
+            None
+        );
+        assert_eq!(
+            db::get_setting(&conn, "output_directory")
+                .expect("output setting preserved")
+                .as_deref(),
+            Some(r"C:\Memoria\Output")
+        );
 
         drop(conn);
         let _ = fs::remove_file(db_path);
