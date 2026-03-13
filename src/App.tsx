@@ -169,6 +169,7 @@ export function App() {
   });
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [showFinalizeToast, setShowFinalizeToast] = useState(false);
+  const [completionToastTotal, setCompletionToastTotal] = useState<number | null>(null);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
   const [resetError, setResetError] = useState<string>("");
   const [resetMode, setResetMode] = useState<"delete" | "state" | null>(null);
@@ -253,6 +254,55 @@ export function App() {
   useEffect(() => {
     refreshAll().catch(() => undefined);
   }, [showExcludedVideos, showExcludedImages]);
+
+  useEffect(() => {
+    if (stats.total > 0 && stats.filed >= stats.total && completionToastTotal !== stats.total) {
+      setShowFinalizeToast(true);
+      setCompletionToastTotal(stats.total);
+      return;
+    }
+    if (stats.total === 0 || stats.filed < stats.total) {
+      setCompletionToastTotal(null);
+    }
+  }, [stats.total, stats.filed, completionToastTotal]);
+
+  const [dashboardStackThumbs, setDashboardStackThumbs] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDashboardThumbs() {
+      if (stats.filed <= 0 || groups.length === 0) {
+        if (!cancelled) setDashboardStackThumbs([]);
+        return;
+      }
+      const groupCandidates = [...groups]
+        .sort((a, b) => b.itemCount - a.itemCount)
+        .slice(0, 3);
+      const itemIds: number[] = [];
+      for (const group of groupCandidates) {
+        const groupItems = await getEventGroupItems(group.id, false);
+        for (const item of groupItems) {
+          itemIds.push(item.id);
+          if (itemIds.length >= 3) break;
+        }
+        if (itemIds.length >= 3) break;
+      }
+      if (itemIds.length === 0) {
+        if (!cancelled) setDashboardStackThumbs([]);
+        return;
+      }
+      const previews = await Promise.all(itemIds.map((id) => getEventGroupMediaPreview(id).catch(() => null)));
+      if (!cancelled) {
+        setDashboardStackThumbs(previews.filter((value): value is string => Boolean(value)));
+      }
+    }
+    loadDashboardThumbs().catch(() => {
+      if (!cancelled) setDashboardStackThumbs([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [stats.filed, groups]);
 
   async function onStart() {
     setBusyAction("ingest");
@@ -644,6 +694,7 @@ export function App() {
                 total={stats.total}
                 filed={stats.filed}
                 needingReview={{ images: stats.imageReview, dates: stats.dateNeedsReview }}
+                previewThumbnails={dashboardStackThumbs}
                 onAction={() => {
                   if (dashboardPrimaryAction.disabled) return;
                   dashboardPrimaryAction.onClick();

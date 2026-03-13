@@ -29,28 +29,32 @@ test.describe("Memoria browser UI", () => {
     await expect(page.getByTestId("dashboard-progress-hero")).toBeVisible();
   });
 
-  test("dashboard progress ring is hollow, gradient, and computed", async ({ page }) => {
-    const ringCircles = page.locator("[data-testid='dashboard-progress-hero'] svg circle");
-    await expect(ringCircles).toHaveCount(2);
+  test("header brand logo is centered above Memoria text", async ({ page }) => {
+    const brand = page.getByTestId("brand-home-link");
+    const logo = page.getByTestId("brand-logo-image");
+    const text = page.getByTestId("brand-logo-text");
 
-    const attrs = await ringCircles.evaluateAll((nodes) =>
-      nodes.map((node) => ({
-        fill: node.getAttribute("fill"),
-        stroke: node.getAttribute("stroke"),
-        strokeDasharray: node.getAttribute("stroke-dasharray"),
-        strokeDashoffset: node.getAttribute("stroke-dashoffset")
-      }))
-    );
+    await expect(brand).toBeVisible();
+    await expect(logo).toBeVisible();
+    await expect(text).toBeVisible();
 
-    expect(attrs[0]?.fill).toBe("none");
-    expect(attrs[1]?.fill).toBe("none");
-    expect(attrs[1]?.stroke).toBe("url(#petalGradient)");
+    const [logoBox, textBox] = await Promise.all([logo.boundingBox(), text.boundingBox()]);
+    expect(logoBox).not.toBeNull();
+    expect(textBox).not.toBeNull();
+    if (!logoBox || !textBox) return;
 
-    const dasharray = Number(attrs[1]?.strokeDasharray ?? "0");
-    const dashoffset = Number(attrs[1]?.strokeDashoffset ?? "0");
-    expect(dasharray).toBeCloseTo(502.6, 1);
-    expect(dashoffset).toBeGreaterThanOrEqual(0);
-    expect(dashoffset).toBeLessThanOrEqual(dasharray);
+    const logoCenterX = logoBox.x + logoBox.width / 2;
+    const textCenterX = textBox.x + textBox.width / 2;
+    expect(Math.abs(logoCenterX - textCenterX)).toBeLessThanOrEqual(6);
+    expect(logoBox.y + logoBox.height).toBeLessThan(textBox.y + 1);
+  });
+
+  test("dashboard narrative hero shows memory stack and edge progress", async ({ page }) => {
+    await expect(page.getByTestId("dashboard-progress-copy")).toContainText("You've filed");
+    await expect(page.getByTestId("progress-memory-stack")).toBeVisible();
+    await expect(page.getByTestId("progress-hero-edge-fill")).toBeVisible();
+    const fillWidth = await page.getByTestId("progress-hero-edge-fill").evaluate((el) => getComputedStyle(el).width);
+    expect(Number.parseFloat(fillWidth)).toBeGreaterThan(0);
   });
 
   test("indexing uses LoadingState component with branded logo", async ({ context }) => {
@@ -67,6 +71,15 @@ test.describe("Memoria browser UI", () => {
     await expect(ingestPage.getByTestId("loading-state-logo")).toHaveClass(/mix-blend-multiply/);
     await expect(ingestPage.getByText("Indexing your media...")).toBeVisible();
     await ingestPage.close();
+  });
+
+  test("dashboard shows completion headline and success toast when fully filed", async ({ context }) => {
+    const completePage = await context.newPage();
+    await installBrowserApiMock(completePage, "complete");
+    await completePage.goto("/");
+    await expect(completePage.getByTestId("dashboard-progress-copy")).toContainText("Your archive is fully organized!");
+    await expect(completePage.getByTestId("finalize-success-toast")).toBeVisible();
+    await completePage.close();
   });
 
   test("image review supports flagged and burst workflows", async ({ page }) => {

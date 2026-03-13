@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "reset-error" | "reset-slow" | "ingest-slow";
+type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "reset-error" | "reset-slow" | "ingest-slow" | "complete";
 
 type DateEstimate = {
   mediaItemId: number;
@@ -132,23 +132,24 @@ function buildState(profile: BrowserFixtureProfile) {
                 ]
         };
 
+  const isComplete = profile === "complete";
   const stats = {
     total: isIngestSlow ? 0 : 8,
     indexed: 2,
-    imageReview: 2,
+    imageReview: isComplete ? 0 : 2,
     imageVerified: 4,
-    dateReview: profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
-    dateNeedsReview: profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
-    dateVerified: 5,
-    grouped: 2,
-    filed: 1,
-    imageFlaggedPending: 2,
+    dateReview: isComplete ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
+    dateNeedsReview: isComplete ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
+    dateVerified: isComplete ? 8 : 5,
+    grouped: isComplete ? 8 : 2,
+    filed: isComplete ? 8 : 1,
+    imageFlaggedPending: isComplete ? 0 : 2,
     imagePhaseState: (profile === "pre-video" || isIngestSlow ? "pending" : "complete") as "pending" | "in_progress" | "complete",
     videoTotal: 3,
     videoFlagged: 2,
     videoExcluded: 1,
     videoUnreviewedFlagged: 2,
-    videoPhaseState: (profile === "pre-video" || isIngestSlow ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
+    videoPhaseState: (isComplete ? "complete" : profile === "pre-video" || isIngestSlow ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
   };
 
   const imageItems: ImageReviewItem[] = [

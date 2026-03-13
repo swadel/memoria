@@ -18,10 +18,11 @@ export const BrandLogo: React.FC<{ size?: string; text?: string; onClick?: () =>
     >
       <img
         src={logo}
-        className={`${size} w-auto object-contain mix-blend-screen opacity-90 appLogo`}
+        className={`${size} w-auto object-contain mix-blend-screen opacity-90 appLogo logoSmooth`}
         alt="Memoria Logo"
+        data-testid="brand-logo-image"
       />
-      <span className="text-xl font-semibold tracking-tighter text-slate-800 title">
+      <span className="text-lg font-semibold tracking-tighter text-slate-800 title" data-testid="brand-logo-text">
         {text}
       </span>
     </button>

@@ -74,6 +74,12 @@ body {
 }
 
 .appBrandButton {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
   border: none;
   background: transparent;
   padding: 0;
@@ -89,8 +95,20 @@ body {
   width: 48px;
   height: 48px;
   object-fit: contain;
+  margin: 0 auto;
+  image-rendering: auto;
+  image-rendering: -webkit-optimize-contrast;
+  transform: translateZ(0);
+  backface-visibility: hidden;
   background: transparent;
   border: none;
+}
+
+.logoSmooth {
+  image-rendering: auto;
+  image-rendering: -webkit-optimize-contrast;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .appLogoPetal {
@@ -122,9 +140,10 @@ body {
 
 .title {
   margin: 0;
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.045em;
+  line-height: 1.05;
 }
 
 .subtitle {
@@ -1223,10 +1242,11 @@ button:hover {
 }
 
 .progressHeroRoot {
-  border-radius: 16px;
+  border-radius: 24px;
   background: #ffffff;
-  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.1);
+  box-shadow: 0 8px 26px rgba(15, 23, 42, 0.1);
   position: relative;
+  border: none;
 }
 
 .progressHeroContent {
@@ -1259,17 +1279,82 @@ button:hover {
   border-radius: 999px;
 }
 
-.progressHeroWatermark {
+.progressHeroMemoryStack {
+  position: relative;
+  width: 240px;
+  height: 180px;
+  flex: 0 0 auto;
+}
+
+.progressHeroMemoryCard {
   position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 120px;
-  height: 120px;
+  width: 140px;
+  height: 170px;
+  object-fit: cover;
+  image-rendering: auto;
+  image-rendering: -webkit-optimize-contrast;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  border-radius: 18px;
+  box-shadow: 0 14px 24px rgba(15, 23, 42, 0.22);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  top: 6px;
+}
+
+.progressHeroMemoryCard1 {
+  left: 10px;
+  transform: rotate(-5deg);
+  z-index: 1;
+}
+
+.progressHeroMemoryCard2 {
+  left: 52px;
+  transform: rotate(0deg);
+  z-index: 2;
+}
+
+.progressHeroMemoryCard3 {
+  left: 94px;
+  transform: rotate(5deg);
+  z-index: 3;
+}
+
+.progressHeroFallback {
+  width: 100%;
+  height: 100%;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.progressHeroFallbackLogo {
+  width: 128px;
+  height: 128px;
   object-fit: contain;
-  opacity: 0.07;
-  filter: saturate(0.65);
-  pointer-events: none;
+  image-rendering: auto;
+  image-rendering: -webkit-optimize-contrast;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  filter: drop-shadow(0 0 24px rgba(147, 197, 253, 0.42));
+}
+
+.progressHeroEdgeBarTrack {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 12px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.7);
+  overflow: hidden;
+}
+
+.progressHeroEdgeBarFill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #93c5fd 0%, #c084fc 50%, #fdba74 100%);
+  transition: width 500ms ease;
 }
 
 .loadingStateOverlay {

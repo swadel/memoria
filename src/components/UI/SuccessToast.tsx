@@ -20,7 +20,7 @@ export const SuccessToast: React.FC<{ show: boolean; onClose: () => void }> = ({
           className="fixed bottom-10 left-1/2 z-[100] flex items-center gap-4 rounded-2xl bg-white/90 p-5 shadow-2xl backdrop-blur-xl border border-white/50 min-w-[320px]"
           data-testid="finalize-success-toast"
         >
-          <img src={logo} className="h-12 w-12 object-contain mix-blend-multiply" alt="Success" />
+          <img src={logo} className="h-12 w-12 object-contain mix-blend-multiply logoSmooth" alt="Success" />
           <div className="flex-1 text-left">
             <h4 className="font-bold text-slate-900 leading-none">Archive Finalized!</h4>
             <p className="text-sm text-slate-600 mt-1">Your memories are safe and organized.</p>
