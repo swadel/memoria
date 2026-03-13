@@ -82,6 +82,17 @@ test.describe("Memoria browser UI", () => {
     await completePage.close();
   });
 
+  test("dashboard fallback logo uses anti-black blend mode", async ({ context }) => {
+    const settingsPage = await context.newPage();
+    await installBrowserApiMock(settingsPage, "settings-only");
+    await settingsPage.goto("/");
+    const fallbackLogo = settingsPage.getByTestId("progress-hero-fallback-logo");
+    await expect(fallbackLogo).toBeVisible();
+    const mixBlendMode = await fallbackLogo.evaluate((el) => getComputedStyle(el).mixBlendMode);
+    expect(mixBlendMode).toBe("screen");
+    await settingsPage.close();
+  });
+
   test("image review supports flagged and burst workflows", async ({ page }) => {
     await page.getByTestId("tab-images").click();
     await expect(page.getByTestId("image-review-view")).toBeVisible();
