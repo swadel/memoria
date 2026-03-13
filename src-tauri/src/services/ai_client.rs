@@ -15,8 +15,20 @@ pub struct DateEstimate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventNameSuggestion {
-    pub name: String,
-    pub confidence: f64,
+    pub folder_name: String,
+    pub confidence: String,
+    pub reasoning: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventNamingRequest {
+    pub start_date: String,
+    pub end_date: String,
+    pub day_count: i64,
+    pub total_count: usize,
+    pub has_location_data: bool,
+    pub location_hint: Option<String>,
+    pub sample_image_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,20 +100,37 @@ impl AiClient {
     }
 
     pub async fn suggest_event_name(&self, year: i32, sample_size: usize) -> Result<EventNameSuggestion> {
+        let request = EventNamingRequest {
+            start_date: format!("{year}-01-01"),
+            end_date: format!("{year}-01-01"),
+            day_count: 1,
+            total_count: sample_size,
+            has_location_data: false,
+            location_hint: None,
+            sample_image_paths: Vec::new(),
+        };
+        self.suggest_event_name_for_cluster(&request).await
+    }
+
+    pub async fn suggest_event_name_for_cluster(
+        &self,
+        request: &EventNamingRequest,
+    ) -> Result<EventNameSuggestion> {
         if let Ok(name) = self
-            .suggest_name_via_config(year, sample_size, &self.routing.event_naming)
+            .suggest_name_via_config(request, &self.routing.event_naming)
             .await
         {
                 return Ok(name);
         }
-        let base = if sample_size > 8 {
+        let base = if request.total_count > 8 {
             "Family Gathering"
         } else {
             "Weekend Moments"
         };
         Ok(EventNameSuggestion {
-            name: format!("{year} - {base}"),
-            confidence: 0.67,
+            folder_name: base.to_string(),
+            confidence: "medium".to_string(),
+            reasoning: "Fallback heuristic used because AI provider was unavailable.".to_string(),
         })
     }
 
@@ -129,8 +158,7 @@ impl AiClient {
 
     async fn suggest_name_via_config(
         &self,
-        year: i32,
-        sample_size: usize,
+        request: &EventNamingRequest,
         config: &TaskModelConfig,
     ) -> Result<EventNameSuggestion> {
         match config.provider.to_ascii_lowercase().as_str() {
@@ -138,14 +166,14 @@ impl AiClient {
                 let Some(key) = self.anthropic_api_key.as_deref() else {
                     anyhow::bail!("Anthropic API key is missing for event naming");
                 };
-                self.suggest_name_via_anthropic(key, &config.model, year, sample_size)
+                self.suggest_name_via_anthropic(key, &config.model, request)
                     .await
             }
             _ => {
                 let Some(key) = self.openai_api_key.as_deref() else {
                     anyhow::bail!("OpenAI API key is missing for event naming");
                 };
-                self.suggest_name_via_openai(key, &config.model, year, sample_size)
+                self.suggest_name_via_openai(key, &config.model, request)
                     .await
             }
         }
@@ -205,14 +233,23 @@ impl AiClient {
         &self,
         api_key: &str,
         model: &str,
-        year: i32,
-        sample_size: usize,
+        request: &EventNamingRequest,
     ) -> Result<EventNameSuggestion> {
+        let prompt = build_event_naming_prompt(request);
+        let mut content = vec![json!({ "type": "text", "text": prompt })];
+        for path in request.sample_image_paths.iter() {
+            if let Ok(data_url) = image_to_data_url(path).await {
+                content.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": data_url }
+                }));
+            }
+        }
         let body = json!({
             "model": model,
             "messages": [{
                 "role": "user",
-                "content": format!("Suggest a concise family photo event name for year {year} with {sample_size} photos. Return JSON {{\"name\":\"{year} - ...\",\"confidence\":0.0}}")
+                "content": content
             }],
             "temperature": 0.3,
             "response_format": { "type": "json_object" }
@@ -232,15 +269,21 @@ impl AiClient {
             .context("Missing content in OpenAI response")?;
         let parsed: serde_json::Value = serde_json::from_str(content)?;
         Ok(EventNameSuggestion {
-            name: parsed
-                .get("name")
+            folder_name: parsed
+                .get("folder_name")
                 .and_then(|x| x.as_str())
-                .unwrap_or(&format!("{year} - Misc"))
+                .unwrap_or("Misc")
                 .to_string(),
             confidence: parsed
                 .get("confidence")
-                .and_then(|x| x.as_f64())
-                .unwrap_or(0.5),
+                .and_then(|x| x.as_str())
+                .unwrap_or("medium")
+                .to_string(),
+            reasoning: parsed
+                .get("reasoning")
+                .and_then(|x| x.as_str())
+                .unwrap_or("No reasoning provided.")
+                .to_string(),
         })
     }
 
@@ -285,29 +328,44 @@ impl AiClient {
         &self,
         api_key: &str,
         model: &str,
-        year: i32,
-        sample_size: usize,
+        request: &EventNamingRequest,
     ) -> Result<EventNameSuggestion> {
+        let prompt = build_event_naming_prompt(request);
+        let mut content = vec![json!({"type":"text","text": prompt})];
+        for path in request.sample_image_paths.iter() {
+            if let Ok((media_type, data)) = image_to_base64_payload(path).await {
+                content.push(json!({
+                    "type":"image",
+                    "source":{"type":"base64","media_type":media_type,"data":data}
+                }));
+            }
+        }
         let body = json!({
             "model": model,
             "max_tokens": 250,
             "temperature": 0.3,
             "messages": [{
                 "role":"user",
-                "content":[{"type":"text","text": format!("Suggest a concise family photo event folder name for year {year} with {sample_size} photos. Return JSON {{\"name\":\"{year} - ...\",\"confidence\":0.0}}")}]
+                "content": content
             }]
         });
         let parsed = self.anthropic_message_json(api_key, &body).await?;
         Ok(EventNameSuggestion {
-            name: parsed
-                .get("name")
+            folder_name: parsed
+                .get("folder_name")
                 .and_then(|x| x.as_str())
-                .unwrap_or(&format!("{year} - Misc"))
+                .unwrap_or("Misc")
                 .to_string(),
             confidence: parsed
                 .get("confidence")
-                .and_then(|x| x.as_f64())
-                .unwrap_or(0.5),
+                .and_then(|x| x.as_str())
+                .unwrap_or("medium")
+                .to_string(),
+            reasoning: parsed
+                .get("reasoning")
+                .and_then(|x| x.as_str())
+                .unwrap_or("No reasoning provided.")
+                .to_string(),
         })
     }
 
@@ -350,6 +408,23 @@ async fn image_to_data_url(path: &str) -> Result<String> {
     Ok(format!("data:{mime};base64,{encoded}"))
 }
 
+fn build_event_naming_prompt(request: &EventNamingRequest) -> String {
+    let location_line = if request.has_location_data {
+        request.location_hint.clone().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    format!(
+        "You are an expert at identifying life events from photo collections.\n\nI will provide you with a sample of photos from a single group, along with the date range they were taken.\n\nDate range: {} to {} ({} days)\nNumber of photos in group: {}\nLocation data available: {}\n{}\n\nYour job is to identify what event or occasion these photos represent and suggest a short, specific folder name.\n\nGuidelines:\n- Be SPECIFIC. \"Portland Trip\" is better than \"Travel\". \"Thatcher Birthday\" is better than \"Birthday\". \"Mexico Beach Vacation\" is better than \"Vacation\".\n- Look for visual cues: birthday cakes, candles, presents, decorations, costumes, holiday decorations, beach/ocean, mountains, landmarks, restaurants, sports fields, school settings, etc.\n- Look for contextual cues: if photos span 5-10 days in a warm location with beaches, it is likely a vacation. If photos show a cake with candles and people gathered, it is a birthday.\n- If you can identify a location (city, country, landmark, region), include it in the name.\n- If you can identify a person the event is centered on, include their name if it appears context is a personal celebration.\n- For holidays use standard names: \"Christmas\", \"Thanksgiving\", \"Fourth of July\", \"Easter\", \"Halloween\".\n- For recurring personal events use: \"Birthday\", \"Anniversary\", \"Graduation\".\n- If truly ambiguous after careful analysis, use \"Misc\".\n\nRespond with ONLY a JSON object in this exact format, no other text:\n{{\n  \"folder_name\": \"Short Event Name\",\n  \"confidence\": \"high|medium|low\",\n  \"reasoning\": \"One sentence explaining what visual or contextual cues led to this name\"\n}}",
+        request.start_date,
+        request.end_date,
+        request.day_count,
+        request.total_count,
+        if request.has_location_data { "true" } else { "false" },
+        location_line
+    )
+}
+
 async fn image_to_base64_payload(path: &str) -> Result<(String, String)> {
     let bytes = fs::read(Path::new(path)).await?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -368,7 +443,7 @@ async fn image_to_base64_payload(path: &str) -> Result<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AiClient, AiRoutingConfig};
+    use super::{build_event_naming_prompt, AiClient, AiRoutingConfig, EventNamingRequest};
 
     #[tokio::test]
     async fn estimate_date_and_event_name_have_local_fallbacks() {
@@ -384,8 +459,26 @@ mod tests {
             .suggest_event_name(2026, 12)
             .await
             .expect("suggest event");
-        assert!(event.name.starts_with("2026 - "));
-        assert!(event.confidence > 0.0);
+        assert!(!event.folder_name.is_empty());
+        assert!(matches!(event.confidence.as_str(), "high" | "medium" | "low"));
+    }
+
+    #[test]
+    fn event_prompt_includes_date_range_and_location_line() {
+        let request = EventNamingRequest {
+            start_date: "2026-02-01".to_string(),
+            end_date: "2026-02-08".to_string(),
+            day_count: 8,
+            total_count: 42,
+            has_location_data: true,
+            location_hint: Some("GPS data suggests these photos were taken in: Portland, United States".to_string()),
+            sample_image_paths: Vec::new(),
+        };
+        let prompt = build_event_naming_prompt(&request);
+        assert!(prompt.contains("Date range: 2026-02-01 to 2026-02-08 (8 days)"));
+        assert!(prompt.contains("Number of photos in group: 42"));
+        assert!(prompt.contains("Location data available: true"));
+        assert!(prompt.contains("GPS data suggests these photos were taken in: Portland, United States"));
     }
 
 }

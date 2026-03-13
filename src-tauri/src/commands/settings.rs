@@ -319,7 +319,7 @@ mod tests {
         db::set_setting(&conn, "working_directory", r"C:\Photos\Inbox").expect("set working");
         db::set_setting(&conn, "output_directory", r"C:\Memoria\Output").expect("set output");
         conn.execute(
-            "INSERT INTO media_items(icloud_id, filename, status) VALUES(?1, ?2, 'classified')",
+            "INSERT INTO media_items(icloud_id, filename, status) VALUES(?1, ?2, 'grouped')",
             ["reset-1", "IMG_1.JPG"],
         )
         .expect("insert media");

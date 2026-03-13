@@ -11,6 +11,11 @@ pub struct DashboardStats {
     pub grouped: i64,
     pub filed: i64,
     pub errors: i64,
+    pub video_total: i64,
+    pub video_flagged: i64,
+    pub video_excluded: i64,
+    pub video_unreviewed_flagged: i64,
+    pub video_phase_state: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +48,22 @@ pub struct EventGroupItemDto {
     pub current_path: String,
     pub date_taken: Option<String>,
     pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoReviewItemDto {
+    pub id: i64,
+    pub filename: String,
+    pub current_path: String,
+    pub date_taken: Option<String>,
+    pub mime_type: String,
+    pub file_size_bytes: i64,
+    pub duration_secs: f64,
+    pub video_width: Option<i64>,
+    pub video_height: Option<i64>,
+    pub video_codec: Option<String>,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

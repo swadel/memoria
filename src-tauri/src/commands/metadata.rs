@@ -5,7 +5,7 @@ use tauri::State;
 
 use crate::{
     models::{DashboardStats, DateEstimateDto},
-    services::{date_enforcer, exiftool, runtime_log},
+    services::{date_enforcer, exiftool, runtime_log, video_review},
     AppState,
 };
 
@@ -38,6 +38,9 @@ pub fn apply_date_approval(media_item_id: i64, date: Option<String>, state: Stat
     tauri::async_runtime::block_on(async {
         let conn = state.open_conn().map_err(|e| e.to_string())?;
         date_enforcer::apply_date_approval(&conn, media_item_id, date)
+            .await
+            .map_err(|e| e.to_string())?;
+        video_review::prepare_video_review(&conn, &state.root_output())
             .await
             .map_err(|e| e.to_string())?;
         runtime_log::info(

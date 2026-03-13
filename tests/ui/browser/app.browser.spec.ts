@@ -12,12 +12,13 @@ test.describe("Memoria browser UI smoke", () => {
     await expect(page.getByTestId("stat-total")).toContainText("8");
     await expect(page.getByTestId("pipeline-index")).toBeVisible();
     await expect(page.getByTestId("pipeline-date-enforcement")).toBeVisible();
+    await expect(page.getByTestId("pipeline-video-review")).toBeVisible();
     await expect(page.getByTestId("pipeline-group")).toBeVisible();
     await expect(page.getByTestId("pipeline-finalize")).toBeVisible();
+    await expect(page.getByTestId("tab-videos")).toContainText("2");
   });
 
   test("removes orphaned dashboard controls and review queue UI", async ({ page }) => {
-    await expect(page.getByTestId("tab-review")).toHaveCount(0);
     await expect(page.getByTestId("pipeline-classify")).toHaveCount(0);
     await expect(page.getByTestId("dashboard-working-directory")).toHaveCount(0);
     await expect(page.getByTestId("dashboard-output-directory")).toHaveCount(0);
@@ -40,7 +41,58 @@ test.describe("Memoria browser UI smoke", () => {
     await expect(page.getByTestId("status-pill")).toContainText("Skipped date approval");
   });
 
+  test("video review filters, previews, exclude and restore", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    await expect(page.getByTestId("video-review-view")).toBeVisible();
+    await expect(page.getByTestId("video-filter-summary")).toContainText("Showing 1 of 2 videos");
+
+    await page.getByTestId("video-size-slider").fill("50");
+    await page.getByTestId("video-duration-slider").fill("120");
+    await expect(page.getByTestId("video-filter-summary")).toContainText("Showing 2 of 2 videos");
+
+    await page.getByTestId("video-select-all-filtered").click();
+    await expect(page.getByTestId("video-exclude-selected")).toBeEnabled();
+    await expect(page.getByTestId("video-item-601")).toHaveAttribute("data-flagged", "true");
+
+    await page.getByTestId("video-open-601").click();
+    await expect(page.getByTestId("video-inline-player-601")).toBeVisible();
+
+    await page.getByTestId("video-open-602").click();
+    await expect(page.getByTestId("video-preview-modal")).toBeVisible();
+    await expect(page.getByTestId("video-preview-player")).toBeVisible();
+    await page.getByTestId("video-preview-prev").click();
+    await page.getByTestId("video-preview-next").click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("video-preview-modal")).toHaveCount(0);
+
+    await page.getByTestId("video-select-all-filtered").click();
+    await page.getByTestId("video-exclude-selected").click();
+    await expect(page.getByTestId("status-pill")).toContainText("moved to recycle");
+    await expect(page.getByTestId("video-filter-summary")).toContainText("Showing 0 of 0 videos");
+
+    await page.getByTestId("video-show-excluded").click();
+    await expect(page.getByTestId("video-filter-summary")).toContainText("Showing 3 of 3 videos");
+    await page.getByTestId("video-restore-601").click();
+    await expect(page.getByTestId("status-pill")).toContainText("restored");
+  });
+
+  test("video done confirmation and tab disabled before phase reached", async ({ page, context }) => {
+    const preVideoPage = await context.newPage();
+    await installBrowserApiMock(preVideoPage, "pre-video");
+    await preVideoPage.goto("/");
+    await expect(preVideoPage.getByTestId("tab-videos")).toBeDisabled();
+    await preVideoPage.close();
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-done-proceed").click();
+    await expect(page.getByTestId("status-pill")).toContainText("Video review complete");
+  });
+
   test("event groups enforce uniqueness and support detail move flows", async ({ page }) => {
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-done-proceed").click();
     await page.getByTestId("tab-events").click();
 
     await page.getByTestId("event-add-group-button").click();
@@ -140,6 +192,9 @@ test.describe("Memoria browser UI smoke", () => {
   test("event detail grid recalculates responsive columns and row counts", async ({ page }) => {
     await installBrowserApiMock(page, "responsive");
     await page.goto("/");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-done-proceed").click();
     await page.getByTestId("tab-events").click();
     await page.getByTestId("event-open-401").click();
     await expect(page.getByTestId("event-group-detail-view")).toBeVisible();
@@ -208,8 +263,11 @@ test.describe("Memoria browser UI smoke", () => {
     for (const width of widths) {
       await page.setViewportSize({ width, height: 920 });
       await page.goto("/");
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.getByTestId("tab-videos").click();
+      await page.getByTestId("video-done-proceed").click();
 
-      for (const tabId of ["tab-dashboard", "tab-dates", "tab-events", "tab-settings"]) {
+      for (const tabId of ["tab-dashboard", "tab-dates", "tab-videos", "tab-events", "tab-settings"]) {
         await page.getByTestId(tabId).click();
         const hasHorizontalOverflow = await page.evaluate(() => {
           const root = document.documentElement;
@@ -222,6 +280,9 @@ test.describe("Memoria browser UI smoke", () => {
 
   test("event group review grid expands card width with window size", async ({ page }) => {
     await page.goto("/");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-done-proceed").click();
     await page.getByTestId("tab-events").click();
     const grid = page.getByTestId("event-groups-review-grid");
 

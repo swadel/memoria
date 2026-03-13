@@ -20,6 +20,19 @@ pub fn run_event_grouping(state: State<'_, AppState>) -> Result<(), String> {
     tauri::async_runtime::block_on(async {
         runtime_log::info("commands.organize", "Invoked run_event_grouping.");
         let conn = state.open_conn().map_err(|e| e.to_string())?;
+        let video_total: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_items WHERE mime_type LIKE 'video/%' AND status IN ('date_verified', 'excluded')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let video_phase = crate::db::get_setting(&conn, "video_review_phase_state")
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "pending".to_string());
+        if video_total > 0 && video_phase != "complete" {
+            return Err("Video Review must be completed before Event Grouping.".to_string());
+        }
         let ai = state.ai_client().await;
         event_grouper::run(&conn, &ai)
             .await

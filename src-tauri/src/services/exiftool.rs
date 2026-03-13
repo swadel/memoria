@@ -16,6 +16,7 @@ pub struct MetadataInfo {
     pub height: Option<i64>,
     pub mime_type: Option<String>,
     pub duration_secs: Option<f64>,
+    pub video_codec: Option<String>,
     pub content_identifier: Option<String>,
 }
 
@@ -53,6 +54,9 @@ pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
         .arg("-ImageHeight")
         .arg("-MIMEType")
         .arg("-Duration")
+        .arg("-VideoCodec")
+        .arg("-CompressorName")
+        .arg("-CodecID")
         .arg("-ContentIdentifier")
         .arg("-ComAppleQuickTimeContentIdentifier")
         .arg(path)
@@ -72,7 +76,11 @@ pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
         .as_array()
         .and_then(|arr| arr.first())
         .ok_or_else(|| anyhow!("Invalid exiftool json output"))?;
-    Ok(MetadataInfo {
+    Ok(parse_metadata_value(first))
+}
+
+fn parse_metadata_value(first: &serde_json::Value) -> MetadataInfo {
+    MetadataInfo {
         date_time_original: first
             .get("DateTimeOriginal")
             .and_then(|v| v.as_str())
@@ -100,6 +108,22 @@ pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<f64>().ok())
             }),
+        video_codec: first
+            .get("VideoCodec")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string)
+            .or_else(|| {
+                first
+                    .get("CompressorName")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+            })
+            .or_else(|| {
+                first
+                    .get("CodecID")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+            }),
         content_identifier: first
             .get("ContentIdentifier")
             .and_then(|v| v.as_str())
@@ -110,7 +134,7 @@ pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string)
             }),
-    })
+    }
 }
 
 pub async fn write_all_dates(path: &Path, date: &str) -> Result<()> {
@@ -127,6 +151,37 @@ pub async fn write_all_dates(path: &Path, date: &str) -> Result<()> {
         return Err(anyhow!("Failed to write EXIF date"));
     }
     Ok(())
+}
+
+pub async fn read_gps_coordinates(path: &Path) -> Result<Option<(f64, f64)>> {
+    let Some(exiftool_bin) = exiftool_binary() else {
+        return Ok(None);
+    };
+    let output = Command::new(exiftool_bin)
+        .arg("-j")
+        .arg("-n")
+        .arg("-GPSLatitude")
+        .arg("-GPSLongitude")
+        .arg(path)
+        .output()
+        .await;
+    let Ok(output) = output else {
+        return Ok(None);
+    };
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let first = parsed
+        .as_array()
+        .and_then(|arr| arr.first())
+        .ok_or_else(|| anyhow!("Invalid exiftool json output"))?;
+    let lat = first.get("GPSLatitude").and_then(|v| v.as_f64());
+    let lon = first.get("GPSLongitude").and_then(|v| v.as_f64());
+    Ok(match (lat, lon) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    })
 }
 
 pub async fn create_thumbnail_ffmpeg(input: &Path, output_jpg: &Path) -> Result<()> {
@@ -148,6 +203,29 @@ pub async fn create_thumbnail_ffmpeg(input: &Path, output_jpg: &Path) -> Result<
         .await?;
     if !status.success() {
         return Err(anyhow!("ffmpeg thumbnail generation failed"));
+    }
+    Ok(())
+}
+
+pub async fn create_video_poster_ffmpeg(input: &Path, output_jpg: &Path) -> Result<()> {
+    let Some(ffmpeg_bin) = ffmpeg_binary() else {
+        return Err(anyhow!("FFmpeg binary was not found."));
+    };
+    let status = Command::new(ffmpeg_bin)
+        .arg("-y")
+        .arg("-ss")
+        .arg("1")
+        .arg("-i")
+        .arg(input)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-q:v")
+        .arg("3")
+        .arg(output_jpg)
+        .status()
+        .await?;
+    if !status.success() {
+        return Err(anyhow!("ffmpeg poster generation failed"));
     }
     Ok(())
 }
@@ -252,4 +330,35 @@ fn platform_exiftool_name() -> &'static str {
 #[cfg(not(target_os = "windows"))]
 fn platform_exiftool_name() -> &'static str {
     "exiftool"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_video_metadata_fields_from_exif_payload() {
+        let payload = serde_json::json!({
+            "DateTimeOriginal": "2026:01:02 03:04:05",
+            "ImageWidth": 1920,
+            "ImageHeight": 1080,
+            "MIMEType": "video/mp4",
+            "Duration": 8.4,
+            "VideoCodec": "h264",
+            "ContentIdentifier": "cid-1"
+        });
+        let info = parse_metadata_value(&payload);
+        assert_eq!(info.width, Some(1920));
+        assert_eq!(info.height, Some(1080));
+        assert_eq!(info.duration_secs, Some(8.4));
+        assert_eq!(info.video_codec.as_deref(), Some("h264"));
+        assert_eq!(info.content_identifier.as_deref(), Some("cid-1"));
+    }
+
+    #[tokio::test]
+    async fn video_poster_generation_errors_for_invalid_input() {
+        let temp = std::env::temp_dir().join(format!("memoria-video-poster-{}.jpg", rand::random::<u64>()));
+        let result = create_video_poster_ffmpeg(std::path::Path::new("C:\\missing\\input.mov"), &temp).await;
+        assert!(result.is_err());
+    }
 }

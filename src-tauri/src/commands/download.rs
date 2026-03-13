@@ -5,7 +5,7 @@ use tauri::State;
 
 use crate::{
     models::SessionInput,
-    services::{date_enforcer, exiftool, runtime_log},
+    services::{date_enforcer, exiftool, runtime_log, video_review},
     AppState,
 };
 
@@ -100,8 +100,8 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
         };
         conn.execute(
             "UPDATE media_items
-             SET current_path=?1, original_path=?2, status='metadata_extracted', width=?3, height=?4, mime_type=COALESCE(?5, mime_type), date_taken=?6, duration_secs=?7, content_identifier=?8, date_taken_source='exif', updated_at=CURRENT_TIMESTAMP
-             WHERE icloud_id=?9",
+             SET current_path=?1, original_path=?2, status='metadata_extracted', width=?3, height=?4, mime_type=COALESCE(?5, mime_type), date_taken=?6, duration_secs=?7, content_identifier=?8, video_codec=?9, date_taken_source='exif', updated_at=CURRENT_TIMESTAMP
+             WHERE icloud_id=?10",
             params![
                 staged_path.to_string_lossy().to_string(),
                 source_path.to_string_lossy().to_string(),
@@ -111,6 +111,7 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
                 meta.date_time_original.map(exif_to_iso),
                 meta.duration_secs,
                 meta.content_identifier,
+                meta.video_codec,
                 icloud_id
             ],
         )?;
@@ -137,6 +138,7 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
 
     let ai = state.ai_client().await;
     date_enforcer::evaluate(&conn, &ai).await?;
+    video_review::prepare_video_review(&conn, &state.root_output()).await?;
     runtime_log::info("download", format!("Session {session_id} date evaluation complete."));
     Ok(session_id)
 }

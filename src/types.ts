@@ -5,6 +5,7 @@ export type ProcessingStatus =
   | "metadata_extracted"
   | "date_review_pending"
   | "date_verified"
+  | "excluded"
   | "grouped"
   | "filed"
   | "error";
@@ -18,6 +19,11 @@ export interface DashboardStats {
   grouped: number;
   filed: number;
   errors: number;
+  videoTotal: number;
+  videoFlagged: number;
+  videoExcluded: number;
+  videoUnreviewedFlagged: number;
+  videoPhaseState: "pending" | "in_progress" | "complete";
 }
 
 export interface EventGroup {
@@ -35,6 +41,20 @@ export interface EventGroupItem {
   currentPath: string;
   dateTaken: string | null;
   mimeType: string;
+}
+
+export interface VideoReviewItem {
+  id: number;
+  filename: string;
+  currentPath: string;
+  dateTaken: string | null;
+  mimeType: string;
+  fileSizeBytes: number;
+  durationSecs: number;
+  videoWidth: number | null;
+  videoHeight: number | null;
+  videoCodec: string | null;
+  status: "date_verified" | "excluded" | string;
 }
 
 export interface DateEstimate {

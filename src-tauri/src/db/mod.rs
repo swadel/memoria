@@ -2,7 +2,11 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
 
-use crate::models::{DashboardStats, DateEstimateDto, EventGroupDto, EventGroupItemDto};
+use crate::models::{DashboardStats, DateEstimateDto, EventGroupDto, EventGroupItemDto, VideoReviewItemDto};
+
+const DEFAULT_VIDEO_FLAG_SIZE_BYTES: i64 = 5 * 1024 * 1024;
+const DEFAULT_VIDEO_FLAG_DURATION_SECS: f64 = 10.0;
+const VIDEO_PHASE_STATE_KEY: &str = "video_review_phase_state";
 
 pub fn init_db(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -29,7 +33,8 @@ CREATE TABLE IF NOT EXISTS media_items (
     date_needs_review   INTEGER DEFAULT 0,
     ai_date_estimate_raw TEXT,
     content_identifier  TEXT,
-    status              TEXT DEFAULT 'queued',
+    status              TEXT NOT NULL DEFAULT 'queued'
+                        CHECK (status IN ('queued','downloading','downloaded','metadata_extracted','date_review_pending','date_verified','excluded','grouped','filed','error')),
     error_message       TEXT,
     event_group_id      INTEGER REFERENCES event_groups(id),
     created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -85,6 +90,9 @@ CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
     )?;
     ensure_column(&conn, "media_items", "content_identifier", "TEXT")?;
     ensure_column(&conn, "media_items", "ai_date_estimate_raw", "TEXT")?;
+    ensure_column(&conn, "media_items", "video_width", "INTEGER")?;
+    ensure_column(&conn, "media_items", "video_height", "INTEGER")?;
+    ensure_column(&conn, "media_items", "video_codec", "TEXT")?;
     if column_exists(&conn, "media_items", "ai_classification_raw")? {
         conn.execute(
             "UPDATE media_items
@@ -134,6 +142,28 @@ pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         [],
         |r| r.get(0),
     )?;
+    let video_total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM media_items
+         WHERE mime_type LIKE 'video/%' AND status IN ('date_verified', 'excluded', 'grouped', 'filed')",
+        [],
+        |r| r.get(0),
+    )?;
+    let video_flagged: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM media_items
+         WHERE mime_type LIKE 'video/%'
+           AND status='date_verified'
+           AND (COALESCE(file_size, 0) <= ?1 OR COALESCE(duration_secs, 0.0) <= ?2)",
+        rusqlite::params![DEFAULT_VIDEO_FLAG_SIZE_BYTES, DEFAULT_VIDEO_FLAG_DURATION_SECS],
+        |r| r.get(0),
+    )?;
+    let video_unreviewed_flagged = video_flagged;
+    let video_excluded: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM media_items WHERE mime_type LIKE 'video/%' AND status='excluded'",
+        [],
+        |r| r.get(0),
+    )?;
+    let video_phase_state = get_setting(conn, VIDEO_PHASE_STATE_KEY)?
+        .unwrap_or_else(|| "pending".to_string());
 
     Ok(DashboardStats {
         total,
@@ -144,6 +174,11 @@ pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         grouped,
         filed,
         errors,
+        video_total,
+        video_flagged,
+        video_excluded,
+        video_unreviewed_flagged,
+        video_phase_state,
     })
 }
 
@@ -211,6 +246,37 @@ pub fn get_event_group_items(conn: &Connection, group_id: i64) -> Result<Vec<Eve
             current_path: row.get(2)?,
             date_taken: row.get(3)?,
             mime_type: row.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn get_video_review_items(conn: &Connection, include_excluded: bool) -> Result<Vec<VideoReviewItemDto>> {
+    let status_clause = if include_excluded {
+        "status IN ('date_verified', 'excluded')"
+    } else {
+        "status='date_verified'"
+    };
+    let sql = format!(
+        "SELECT id, filename, COALESCE(current_path, ''), date_taken, COALESCE(mime_type, ''), COALESCE(file_size, 0), COALESCE(duration_secs, 0.0), video_width, video_height, video_codec, status
+         FROM media_items
+         WHERE mime_type LIKE 'video/%' AND {status_clause}
+         ORDER BY date_taken ASC, id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        Ok(VideoReviewItemDto {
+            id: row.get(0)?,
+            filename: row.get(1)?,
+            current_path: row.get(2)?,
+            date_taken: row.get(3)?,
+            mime_type: row.get(4)?,
+            file_size_bytes: row.get(5)?,
+            duration_secs: row.get(6)?,
+            video_width: row.get(7)?,
+            video_height: row.get(8)?,
+            video_codec: row.get(9)?,
+            status: row.get(10)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

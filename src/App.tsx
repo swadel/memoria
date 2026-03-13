@@ -2,9 +2,11 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   applyDateApproval,
+  completeVideoReviewAndRunGrouping,
   createEventGroup,
   createEventGroupAndMove,
   deleteEventGroup,
+  excludeVideos,
   finalizeOrganization,
   getAppConfiguration,
   getDashboardStats,
@@ -14,10 +16,12 @@ import {
   getEventGroupMediaPreview,
   getEventGroups,
   getToolHealth,
+  getVideoReviewItems,
   initializeApp,
   moveEventGroupItems,
   renameEventGroup,
   runEventGrouping,
+  restoreVideos,
   setAiTaskModel,
   setAnthropicKey,
   setOpenAiKey,
@@ -39,10 +43,10 @@ import {
   calculateEmptySlotsInRow,
   calculateRowCount
 } from "./lib/responsiveGrid";
-import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem } from "./types";
+import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, VideoReviewItem } from "./types";
 
-type Tab = "dashboard" | "dates" | "events" | "settings";
-type PipelineStage = "index" | "date" | "group" | "finalize";
+type Tab = "dashboard" | "dates" | "videos" | "events" | "settings";
+type PipelineStage = "index" | "date" | "video" | "group" | "finalize";
 type PipelineStageState = "idle" | "running" | "completed" | "failed";
 
 const DEFAULT_STATS: DashboardStats = {
@@ -53,13 +57,21 @@ const DEFAULT_STATS: DashboardStats = {
   dateVerified: 0,
   grouped: 0,
   filed: 0,
-  errors: 0
+  errors: 0,
+  videoTotal: 0,
+  videoFlagged: 0,
+  videoExcluded: 0,
+  videoUnreviewedFlagged: 0,
+  videoPhaseState: "pending"
 };
 
 const POLL_INTERVAL_MS = Number(import.meta.env.VITE_REFRESH_INTERVAL_MS ?? "3000");
 const DISABLE_UI_POLLING = import.meta.env.VITE_E2E_DISABLE_POLLING === "1";
 
 function derivePipelineStages(stats: DashboardStats): Record<PipelineStage, PipelineStageState> {
+  const dateCompleted =
+    stats.total > 0 && stats.dateNeedsReview === 0 && (stats.dateVerified > 0 || stats.videoTotal > 0 || stats.grouped > 0 || stats.filed > 0);
+  const videoCompleted = stats.videoPhaseState === "complete" || (stats.videoTotal === 0 && dateCompleted);
   return {
     index: stats.total > 0 ? "completed" : "idle",
     date:
@@ -70,7 +82,15 @@ function derivePipelineStages(stats: DashboardStats): Record<PipelineStage, Pipe
           : stats.dateVerified > 0 || stats.grouped > 0 || stats.filed > 0
             ? "completed"
             : "idle",
-    group: stats.grouped > 0 || stats.filed > 0 ? "completed" : "idle",
+    video:
+      !dateCompleted
+        ? "idle"
+        : videoCompleted
+          ? "completed"
+          : stats.videoTotal > 0
+            ? "running"
+            : "idle",
+    group: stats.grouped > 0 || stats.filed > 0 ? "completed" : videoCompleted ? "idle" : "idle",
     finalize: stats.filed > 0 ? "completed" : "idle"
   };
 }
@@ -80,6 +100,8 @@ export function App() {
   const [stats, setStats] = useState<DashboardStats>(DEFAULT_STATS);
   const [dateItems, setDateItems] = useState<DateEstimate[]>([]);
   const [groups, setGroups] = useState<EventGroup[]>([]);
+  const [videoItems, setVideoItems] = useState<VideoReviewItem[]>([]);
+  const [showExcludedVideos, setShowExcludedVideos] = useState(false);
   const [message, setMessage] = useState<string>("");
   const [workingDirectory, setWorkingDirectoryState] = useState("C:\\Memoria\\inbox");
   const [outputDirectory, setOutputDirectoryState] = useState("C:\\Memoria");
@@ -111,19 +133,22 @@ export function App() {
   );
 
   async function refreshAll() {
-    const [nextStats, nextDateItems, nextGroups] = await Promise.all([
+    const [nextStats, nextDateItems, nextGroups, nextVideoItems] = await Promise.all([
       getDashboardStats(),
       getDateReviewQueue(),
-      getEventGroups()
+      getEventGroups(),
+      getVideoReviewItems(showExcludedVideos)
     ]);
     setStats(nextStats);
     setDateItems(nextDateItems);
     setGroups(nextGroups);
+    setVideoItems(nextVideoItems);
     setPipelineStages((prev) => {
       const derived = derivePipelineStages(nextStats);
       return {
         index: prev.index === "failed" ? "failed" : derived.index,
         date: prev.date === "failed" ? "failed" : derived.date,
+        video: prev.video === "failed" ? "failed" : derived.video,
         group: prev.group === "failed" ? "failed" : derived.group,
         finalize: prev.finalize === "failed" ? "failed" : derived.finalize
       };
@@ -160,9 +185,13 @@ export function App() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    refreshAll().catch(() => undefined);
+  }, [showExcludedVideos]);
+
   async function onStart() {
     setBusyAction("ingest");
-    setPipelineStages((prev) => ({ ...prev, index: "running", date: "idle", group: "idle", finalize: "idle" }));
+    setPipelineStages((prev) => ({ ...prev, index: "running", date: "idle", video: "idle", group: "idle", finalize: "idle" }));
     try {
       await startDownloadSession({ workingDirectory, outputDirectory });
       await refreshAll();
@@ -367,7 +396,20 @@ export function App() {
         <button data-testid="tab-dates" className={tab === "dates" ? "tab active" : "tab"} onClick={() => setTab("dates")}>
           Date Approval
         </button>
-        <button data-testid="tab-events" className={tab === "events" ? "tab active" : "tab"} onClick={() => setTab("events")}>
+        <button
+          data-testid="tab-videos"
+          className={tab === "videos" ? "tab active" : "tab"}
+          onClick={() => setTab("videos")}
+          disabled={stats.videoPhaseState === "pending" && stats.dateNeedsReview > 0}
+        >
+          Video Review {stats.videoUnreviewedFlagged > 0 ? `(${stats.videoUnreviewedFlagged})` : ""}
+        </button>
+        <button
+          data-testid="tab-events"
+          className={tab === "events" ? "tab active" : "tab"}
+          onClick={() => setTab("events")}
+          disabled={stats.videoTotal > 0 && stats.videoPhaseState !== "complete"}
+        >
           Event Groups
         </button>
         <button data-testid="tab-settings" className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>
@@ -407,20 +449,28 @@ export function App() {
                 {datePhaseLabel}
               </button>
               <button
+                data-testid="pipeline-video-review"
+                className={pipelineButtonClass(pipelineStages.video)}
+                disabled={busyAction !== null || stats.dateNeedsReview > 0}
+                onClick={() => setTab("videos")}
+              >
+                3) Video Review ({stats.videoTotal} total, {stats.videoFlagged} flagged)
+              </button>
+              <button
                 data-testid="pipeline-group"
                 className={pipelineButtonClass(pipelineStages.group)}
-                disabled={busyAction !== null || stats.dateNeedsReview > 0}
+                disabled={busyAction !== null || stats.dateNeedsReview > 0 || (stats.videoTotal > 0 && stats.videoPhaseState !== "complete")}
                 onClick={onRunGrouping}
               >
-                {busyAction === "group" ? "Grouping..." : "3) Group"}
+                {busyAction === "group" ? "Grouping..." : "4) Group"}
               </button>
               <button
                 data-testid="pipeline-finalize"
                 className={pipelineButtonClass(pipelineStages.finalize)}
-                disabled={busyAction !== null || stats.dateNeedsReview > 0}
+                disabled={busyAction !== null || stats.dateNeedsReview > 0 || (stats.videoTotal > 0 && stats.videoPhaseState !== "complete")}
                 onClick={onFinalize}
               >
-                {busyAction === "finalize" ? "Finalizing..." : "4) Finalize"}
+                {busyAction === "finalize" ? "Finalizing..." : "5) Finalize"}
               </button>
               <button
                 data-testid="pipeline-reset-session"
@@ -434,6 +484,23 @@ export function App() {
             <div className="muted" data-testid="pipeline-phase-help">
               Index Media now performs scanning, metadata extraction, and missing-date detection before grouping.
             </div>
+          </div>
+          <div className="card" data-testid="dashboard-video-review-tile">
+            <h3 style={{ marginTop: 0 }}>Video Review</h3>
+            <div className="muted" data-testid="dashboard-video-review-status">Status: {stats.videoPhaseState}</div>
+            <div className="row">
+              <div data-testid="dashboard-video-total">Total: {stats.videoTotal}</div>
+              <div data-testid="dashboard-video-flagged">Flagged: {stats.videoFlagged}</div>
+              <div data-testid="dashboard-video-excluded">Excluded: {stats.videoExcluded}</div>
+            </div>
+            <button
+              data-testid="dashboard-review-videos"
+              className="primaryBtn"
+              disabled={stats.videoPhaseState === "pending" && stats.dateNeedsReview > 0}
+              onClick={() => setTab("videos")}
+            >
+              Review Videos
+            </button>
           </div>
         </>
       )}
@@ -463,6 +530,26 @@ export function App() {
               />
             ))}
           </div>
+        </div>
+      )}
+
+      {tab === "videos" && (
+        <div className="card" data-testid="video-review-card">
+          <VideoReviewView
+            items={videoItems}
+            excludedCount={stats.videoExcluded}
+            showExcluded={showExcludedVideos}
+            onToggleShowExcluded={(next) => setShowExcludedVideos(next)}
+            onRefresh={refreshAll}
+            onBusy={(busy) => setBusyAction(busy ? "video-review" : null)}
+            onMessage={setMessage}
+            onProceed={async () => {
+              await completeVideoReviewAndRunGrouping();
+              await refreshAll();
+              setTab("events");
+              setMessage("Video review complete. Event grouping started.");
+            }}
+          />
         </div>
       )}
 
@@ -1335,6 +1422,356 @@ function EventThumbCard({
       {selected ? <div className="eventThumbCheckmark">✓</div> : null}
     </div>
   );
+}
+
+function VideoReviewView({
+  items,
+  excludedCount,
+  showExcluded,
+  onToggleShowExcluded,
+  onRefresh,
+  onBusy,
+  onMessage,
+  onProceed
+}: {
+  items: VideoReviewItem[];
+  excludedCount: number;
+  showExcluded: boolean;
+  onToggleShowExcluded: (next: boolean) => void;
+  onRefresh: () => Promise<void>;
+  onBusy: (busy: boolean) => void;
+  onMessage: (message: string) => void;
+  onProceed: () => Promise<void>;
+}) {
+  const [sizeThresholdMb, setSizeThresholdMb] = useState(5);
+  const [durationThresholdSecs, setDurationThresholdSecs] = useState(10);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [thumbs, setThumbs] = useState<Record<number, string>>({});
+  const [previewById, setPreviewById] = useState<Record<number, string>>({});
+  const [inlinePlayingId, setInlinePlayingId] = useState<number | null>(null);
+  const [modalIndex, setModalIndex] = useState<number | null>(null);
+  const [columnCount, setColumnCount] = useState(4);
+  const [scrollHeight, setScrollHeight] = useState(500);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const scrollWrapperRef = useRef<HTMLDivElement>(null);
+  const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const filtered = useMemo(
+    () =>
+      items.filter((item) => {
+        const underSize = item.fileSizeBytes <= sizeThresholdMb * 1024 * 1024;
+        const underDuration = item.durationSecs <= durationThresholdSecs;
+        return underSize || underDuration;
+      }),
+    [items, sizeThresholdMb, durationThresholdSecs]
+  );
+
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => filtered.some((item) => item.id === id)));
+  }, [filtered]);
+
+  useEffect(() => {
+    const pending = filtered
+      .filter((item) => !thumbs[item.id])
+      .slice(0, 12)
+      .map((item) =>
+        getDateMediaThumbnail(item.id)
+          .then((src) => ({ id: item.id, src: src ?? "" }))
+          .catch(() => ({ id: item.id, src: "" }))
+      );
+    if (pending.length === 0) return;
+    Promise.all(pending).then((entries) => {
+      setThumbs((prev) => {
+        const next = { ...prev };
+        for (const entry of entries) next[entry.id] = entry.src;
+        return next;
+      });
+    });
+  }, [filtered, thumbs]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setColumnCount(calculateColumnCount(entry.contentRect.width, MIN_ITEM_WIDTH));
+      }
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const updateHeight = () => {
+      if (scrollWrapperRef.current) {
+        const rect = scrollWrapperRef.current.getBoundingClientRect();
+        setScrollHeight(Math.max(280, window.innerHeight - rect.top - 18));
+      }
+    };
+    updateHeight();
+    window.addEventListener("resize", updateHeight);
+    return () => window.removeEventListener("resize", updateHeight);
+  }, []);
+
+  const rowCount = calculateRowCount(filtered.length, columnCount);
+  const rowVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => ITEM_HEIGHT + 20,
+    overscan: 3
+  });
+
+  const modalItems = filtered;
+  const modalItem = modalIndex === null ? null : modalItems[modalIndex] ?? null;
+
+  useEffect(() => {
+    if (modalIndex === null) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setModalIndex(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modalIndex]);
+
+  async function ensurePreview(id: number) {
+    if (previewById[id]) return previewById[id];
+    const src = (await getEventGroupMediaPreview(id)) ?? "";
+    setPreviewById((prev) => ({ ...prev, [id]: src }));
+    return src;
+  }
+
+  async function handleOpen(item: VideoReviewItem, index: number) {
+    await ensurePreview(item.id);
+    if (item.durationSecs < 10) {
+      setInlinePlayingId(item.id);
+      return;
+    }
+    setModalIndex(index);
+  }
+
+  async function handleExclude(ids: number[]) {
+    if (ids.length === 0) return;
+    onBusy(true);
+    try {
+      const moved = await excludeVideos(ids);
+      await onRefresh();
+      setSelectedIds([]);
+      onMessage(`${moved} video(s) moved to recycle`);
+    } catch (err) {
+      onMessage(`Exclude failed: ${String(err)}`);
+    } finally {
+      onBusy(false);
+    }
+  }
+
+  async function handleRestore(ids: number[]) {
+    if (ids.length === 0) return;
+    onBusy(true);
+    try {
+      const moved = await restoreVideos(ids);
+      await onRefresh();
+      setSelectedIds([]);
+      onMessage(`${moved} video(s) restored`);
+    } catch (err) {
+      onMessage(`Restore failed: ${String(err)}`);
+    } finally {
+      onBusy(false);
+    }
+  }
+
+  return (
+    <div data-testid="video-review-view">
+      <h3 style={{ marginTop: 0 }}>Video Review</h3>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+        <div className="row">
+          <button data-testid="video-show-active" className={showExcluded ? "secondaryBtn" : "primaryBtn"} onClick={() => onToggleShowExcluded(false)}>
+            Show active
+          </button>
+          <button data-testid="video-show-excluded" className={showExcluded ? "primaryBtn" : "secondaryBtn"} onClick={() => onToggleShowExcluded(true)}>
+            Show excluded
+          </button>
+        </div>
+        <div data-testid="video-filter-summary" className="muted">Showing {filtered.length} of {items.length} videos</div>
+      </div>
+
+      <div className="item" data-testid="video-filter-bar">
+        <label htmlFor="video-size-slider">Show videos under {sizeThresholdMb} MB</label>
+        <input
+          id="video-size-slider"
+          data-testid="video-size-slider"
+          type="range"
+          min={0}
+          max={50}
+          value={sizeThresholdMb}
+          onChange={(e) => setSizeThresholdMb(Number(e.target.value))}
+        />
+        <label htmlFor="video-duration-slider">Show videos under {durationThresholdSecs} sec</label>
+        <input
+          id="video-duration-slider"
+          data-testid="video-duration-slider"
+          type="range"
+          min={0}
+          max={120}
+          value={durationThresholdSecs}
+          onChange={(e) => setDurationThresholdSecs(Number(e.target.value))}
+        />
+        <div className="row">
+          <button data-testid="video-select-all-filtered" className="secondaryBtn" onClick={() => setSelectedIds(filtered.map((item) => item.id))}>
+            Select All Filtered
+          </button>
+          {showExcluded ? (
+            <button
+              data-testid="video-restore-selected"
+              className="primaryBtn"
+              disabled={selectedIds.length === 0}
+              onClick={() => void handleRestore(selectedIds)}
+            >
+              Restore Selected
+            </button>
+          ) : (
+            <button
+              data-testid="video-exclude-selected"
+              className="primaryBtn"
+              disabled={selectedIds.length === 0}
+              onClick={() => void handleExclude(selectedIds)}
+            >
+              Exclude Selected
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div ref={scrollWrapperRef}>
+        <div
+          className="eventVirtualGridViewport"
+          ref={containerRef}
+          data-testid="video-virtual-grid"
+          style={{ height: `${scrollHeight}px`, overflow: "auto", position: "relative" }}
+        >
+          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const startIndex = virtualRow.index * columnCount;
+              const rowItems = filtered.slice(startIndex, startIndex + columnCount);
+              const emptySlotCount = calculateEmptySlotsInRow(rowItems.length, columnCount);
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{ position: "absolute", top: virtualRow.start, left: 0, right: 0, display: "flex", gap: "8px", padding: "0 8px", boxSizing: "border-box" }}
+                >
+                  {rowItems.map((item, offset) => {
+                    const isSelected = selected.has(item.id);
+                    const underSize = item.fileSizeBytes <= sizeThresholdMb * 1024 * 1024;
+                    const underDuration = item.durationSecs <= durationThresholdSecs;
+                    const flagged = underSize || underDuration;
+                    const previewSrc = previewById[item.id] ?? "";
+                    const thumbSrc = thumbs[item.id] || getDateThumbFallbackDataUrl(item.filename);
+                    return (
+                      <div
+                        key={item.id}
+                        className={isSelected ? "eventThumbCard selected" : "eventThumbCard"}
+                        data-testid={`video-item-${item.id}`}
+                        data-flagged={flagged ? "true" : "false"}
+                        style={{ flex: "1 1 0", minWidth: 0, position: "relative", borderColor: flagged ? "#d97706" : undefined, background: flagged ? "#fffbeb" : undefined }}
+                      >
+                        {inlinePlayingId === item.id && previewSrc ? (
+                          <video data-testid={`video-inline-player-${item.id}`} src={previewSrc} autoPlay muted controls style={{ width: "100%", height: THUMBNAIL_SIZE, objectFit: "cover" }} />
+                        ) : (
+                          <button data-testid={`video-open-${item.id}`} className="eventThumbPreviewButton" onClick={() => void handleOpen(item, startIndex + offset)}>
+                            <img className="eventThumbImage" src={thumbSrc} alt={item.filename} style={{ width: "100%", height: THUMBNAIL_SIZE, objectFit: "cover" }} />
+                            <span data-testid={`video-play-overlay-${item.id}`} className="eventThumbCheckmark" style={{ top: 10, right: 10 }}>▶</span>
+                          </button>
+                        )}
+                        <div className="eventThumbMeta" style={{ padding: "6px 8px" }}>
+                          <strong className="truncateOneLine" style={{ fontSize: 12, fontWeight: 500 }}>{item.filename}</strong>
+                          <div className="muted truncateOneLine" style={{ fontSize: 11 }}>{formatFileSize(item.fileSizeBytes)} • {formatDuration(item.durationSecs)}</div>
+                        </div>
+                        <div style={{ padding: "0 8px 8px" }} className="row">
+                          <button
+                            data-testid={`video-select-${item.id}`}
+                            className="eventThumbSelectButton"
+                            onClick={() => setSelectedIds((prev) => prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id])}
+                            style={{ width: "100%" }}
+                          >
+                            {isSelected ? "Selected" : "Select"}
+                          </button>
+                          {showExcluded ? (
+                            <button data-testid={`video-restore-${item.id}`} className="secondaryBtn" onClick={() => void handleRestore([item.id])}>Restore</button>
+                          ) : (
+                            <button data-testid={`video-exclude-${item.id}`} className="secondaryBtn" onClick={() => void handleExclude([item.id])}>Exclude</button>
+                          )}
+                        </div>
+                        {isSelected ? <div className="eventThumbCheckmark">✓</div> : null}
+                      </div>
+                    );
+                  })}
+                  {emptySlotCount > 0 ? Array.from({ length: emptySlotCount }).map((_, index) => <div key={`v-empty-${virtualRow.index}-${index}`} style={{ flex: "1 1 0", minWidth: 0 }} />) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {!showExcluded ? (
+        <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+          <button
+            data-testid="video-done-proceed"
+            className="primaryBtn"
+            onClick={() => {
+              const groupedCount = items.length;
+              const ok = window.confirm(`${groupedCount} videos will be grouped. ${excludedCount} videos have been excluded. Proceed?`);
+              if (!ok) return;
+              void onProceed();
+            }}
+          >
+            Done - Proceed to Event Grouping
+          </button>
+        </div>
+      ) : null}
+
+      {modalItem ? (
+        <div className="lightboxOverlay" data-testid="video-preview-modal-overlay" onClick={() => setModalIndex(null)}>
+          <div className="lightboxCard" data-testid="video-preview-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <strong>{modalItem.filename}</strong>
+              <button className="secondaryBtn" data-testid="video-preview-close" onClick={() => setModalIndex(null)}>Close</button>
+            </div>
+            <video
+              data-testid="video-preview-player"
+              src={previewById[modalItem.id] ?? ""}
+              controls
+              style={{ width: "100%", maxHeight: "55vh", background: "#000" }}
+            />
+            <div className="muted" data-testid="video-preview-metadata">
+              {formatFileSize(modalItem.fileSizeBytes)} • {formatDuration(modalItem.durationSecs)} • {modalItem.dateTaken ?? "(missing date)"}
+            </div>
+            <div className="row">
+              <button data-testid="video-preview-prev" className="secondaryBtn" disabled={(modalIndex ?? 0) <= 0} onClick={() => setModalIndex((prev) => (prev === null ? prev : Math.max(0, prev - 1)))}>
+                Previous
+              </button>
+              <button data-testid="video-preview-next" className="secondaryBtn" disabled={(modalIndex ?? 0) >= modalItems.length - 1} onClick={() => setModalIndex((prev) => (prev === null ? prev : Math.min(modalItems.length - 1, prev + 1)))}>
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
 function normalizeName(value: string): string {

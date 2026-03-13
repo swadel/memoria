@@ -6,3 +6,4 @@ pub mod file_organizer;
 pub mod runtime_log;
 pub mod settings;
 pub mod test_fixtures;
+pub mod video_review;

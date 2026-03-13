@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-type BrowserFixtureProfile = "all" | "settings-only" | "responsive";
+type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video";
 
 type DateEstimate = {
   mediaItemId: number;
@@ -26,6 +26,20 @@ type EventGroupItem = {
   currentPath: string;
   dateTaken: string | null;
   mimeType: string;
+};
+
+type VideoReviewItem = {
+  id: number;
+  filename: string;
+  currentPath: string;
+  dateTaken: string | null;
+  mimeType: string;
+  fileSizeBytes: number;
+  durationSecs: number;
+  videoWidth: number | null;
+  videoHeight: number | null;
+  videoCodec: string | null;
+  status: string;
 };
 
 function buildState(profile: BrowserFixtureProfile) {
@@ -103,12 +117,59 @@ function buildState(profile: BrowserFixtureProfile) {
     total: 8,
     downloading: 0,
     indexed: 8,
-    dateNeedsReview: dateItems.length,
+    dateNeedsReview: profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
     dateVerified: 5,
     grouped: 2,
     filed: 1,
-    errors: 0
+    errors: 0,
+    videoTotal: 3,
+    videoFlagged: 2,
+    videoExcluded: 1,
+    videoUnreviewedFlagged: 2,
+    videoPhaseState: (profile === "pre-video" ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
   };
+
+  const videoItems: VideoReviewItem[] = [
+    {
+      id: 601,
+      filename: "live_clip.mov",
+      currentPath: "C:\\fixture\\output\\staging\\live_clip.mov",
+      dateTaken: "2026-03-10",
+      mimeType: "video/quicktime",
+      fileSizeBytes: 1_200_000,
+      durationSecs: 3,
+      videoWidth: 1080,
+      videoHeight: 1920,
+      videoCodec: "h264",
+      status: "date_verified"
+    },
+    {
+      id: 602,
+      filename: "trip_video.mp4",
+      currentPath: "C:\\fixture\\output\\staging\\trip_video.mp4",
+      dateTaken: "2026-03-11",
+      mimeType: "video/mp4",
+      fileSizeBytes: 18_000_000,
+      durationSecs: 84,
+      videoWidth: 1920,
+      videoHeight: 1080,
+      videoCodec: "h264",
+      status: "date_verified"
+    },
+    {
+      id: 603,
+      filename: "excluded_clip.mov",
+      currentPath: "C:\\fixture\\output\\recycle\\excluded_clip.mov",
+      dateTaken: "2026-03-11",
+      mimeType: "video/quicktime",
+      fileSizeBytes: 800_000,
+      durationSecs: 2,
+      videoWidth: 1080,
+      videoHeight: 1920,
+      videoCodec: "h264",
+      status: "excluded"
+    }
+  ];
 
   return {
     config: {
@@ -123,6 +184,7 @@ function buildState(profile: BrowserFixtureProfile) {
     dateItems,
     eventGroups,
     eventGroupItemsByGroupId,
+    videoItems,
     nextGroupId: 402
   };
 }
@@ -173,6 +235,14 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             }
             case "get_event_group_media_preview":
               return Promise.resolve(tinyPngDataUrl);
+            case "get_video_review_items": {
+              const includeExcluded = Boolean(args?.includeExcluded ?? args?.include_excluded);
+              return Promise.resolve(
+                state.videoItems.filter((item: VideoReviewItem) =>
+                  includeExcluded ? ["date_verified", "excluded"].includes(item.status) : item.status === "date_verified"
+                )
+              );
+            }
             case "set_working_directory":
               state.config.workingDirectory = String(args?.path ?? state.config.workingDirectory);
               return Promise.resolve();
@@ -186,6 +256,29 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "run_event_grouping":
             case "finalize_organization":
               return Promise.resolve();
+            case "complete_video_review_and_run_grouping":
+              state.stats.videoPhaseState = "complete";
+              return Promise.resolve();
+            case "exclude_videos": {
+              const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
+              state.videoItems = state.videoItems.map((item: VideoReviewItem) =>
+                ids.includes(item.id) ? { ...item, status: "excluded", currentPath: item.currentPath.replace("\\staging\\", "\\recycle\\") } : item
+              );
+              state.stats.videoExcluded = state.videoItems.filter((item: VideoReviewItem) => item.status === "excluded").length;
+              state.stats.videoFlagged = state.videoItems.filter((item: VideoReviewItem) => item.status === "date_verified" && (item.fileSizeBytes <= 5 * 1024 * 1024 || item.durationSecs <= 10)).length;
+              state.stats.videoUnreviewedFlagged = state.stats.videoFlagged;
+              return Promise.resolve(ids.length);
+            }
+            case "restore_videos": {
+              const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
+              state.videoItems = state.videoItems.map((item: VideoReviewItem) =>
+                ids.includes(item.id) ? { ...item, status: "date_verified", currentPath: item.currentPath.replace("\\recycle\\", "\\staging\\") } : item
+              );
+              state.stats.videoExcluded = state.videoItems.filter((item: VideoReviewItem) => item.status === "excluded").length;
+              state.stats.videoFlagged = state.videoItems.filter((item: VideoReviewItem) => item.status === "date_verified" && (item.fileSizeBytes <= 5 * 1024 * 1024 || item.durationSecs <= 10)).length;
+              state.stats.videoUnreviewedFlagged = state.stats.videoFlagged;
+              return Promise.resolve(ids.length);
+            }
             case "reset_session":
               state.dateItems = [];
               state.eventGroups = [];
@@ -198,7 +291,12 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                 dateVerified: 0,
                 grouped: 0,
                 filed: 0,
-                errors: 0
+                errors: 0,
+                videoTotal: 0,
+                videoFlagged: 0,
+                videoExcluded: 0,
+                videoUnreviewedFlagged: 0,
+                videoPhaseState: "pending"
               };
               return Promise.resolve({
                 deletedGeneratedFiles: Boolean(args?.deleteGeneratedFiles),

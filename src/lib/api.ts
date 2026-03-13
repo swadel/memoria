@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem } from "../types";
+import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, VideoReviewItem } from "../types";
 
 declare global {
   interface Window {
@@ -148,6 +148,22 @@ export function createEventGroupAndMove(name: string, mediaItemIds: number[]) {
 
 export function finalizeOrganization() {
   return invokeCommand<void>("finalize_organization");
+}
+
+export function getVideoReviewItems(includeExcluded: boolean) {
+  return invokeCommand<VideoReviewItem[]>("get_video_review_items", { includeExcluded, include_excluded: includeExcluded });
+}
+
+export function excludeVideos(mediaItemIds: number[]) {
+  return invokeCommand<number>("exclude_videos", { mediaItemIds, media_item_ids: mediaItemIds });
+}
+
+export function restoreVideos(mediaItemIds: number[]) {
+  return invokeCommand<number>("restore_videos", { mediaItemIds, media_item_ids: mediaItemIds });
+}
+
+export function completeVideoReviewAndRunGrouping() {
+  return invokeCommand<void>("complete_video_review_and_run_grouping");
 }
 
 export function resetSession(deleteGeneratedFiles: boolean) {
