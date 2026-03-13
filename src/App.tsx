@@ -509,7 +509,13 @@ export function App() {
                           alt={item.filename}
                           onClick={() => openLightbox(cluster.items, item)}
                           onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).src = getReviewOriginalUrl(item);
+                            const img = e.currentTarget as HTMLImageElement;
+                            if (img.dataset.fallbackApplied === "1") {
+                              img.src = getThumbFallbackDataUrl(item.filename);
+                              return;
+                            }
+                            img.dataset.fallbackApplied = "1";
+                            img.src = getReviewOriginalUrl(item);
                           }}
                         />
                         <strong>{item.filename}</strong>
@@ -904,7 +910,13 @@ function ReviewItemCard({
         alt={item.filename}
         onClick={() => onOpenPreview(item)}
         onError={(e) => {
-          (e.currentTarget as HTMLImageElement).src = getReviewOriginalUrl(item);
+          const img = e.currentTarget as HTMLImageElement;
+          if (img.dataset.fallbackApplied === "1") {
+            img.src = getThumbFallbackDataUrl(item.filename);
+            return;
+          }
+          img.dataset.fallbackApplied = "1";
+          img.src = getReviewOriginalUrl(item);
         }}
       />
       <label className="row" htmlFor={`review-select-${item.id}`}>
@@ -958,6 +970,16 @@ function safeConvertFileSrc(path: string): string {
     const normalized = path.replace(/\\/g, "/");
     return /^[a-zA-Z]:\//.test(normalized) ? `file:///${normalized}` : `file://${normalized}`;
   }
+}
+
+function getThumbFallbackDataUrl(filename: string): string {
+  const label = escapeSvgText(filename.split(".").pop()?.toUpperCase() ?? "FILE");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="#f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#6b7280" font-family="Segoe UI, Arial, sans-serif" font-size="32">${label}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function escapeSvgText(value: string): string {
+  return value.replace(/[<>&'"]/g, "_");
 }
 
 function StatCard({

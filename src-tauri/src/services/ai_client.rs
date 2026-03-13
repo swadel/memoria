@@ -111,7 +111,7 @@ impl AiClient {
         }
         Ok(ClassificationResult {
             category: "legitimate".to_string(),
-            confidence: 0.88,
+            confidence: 0.92,
         })
     }
 

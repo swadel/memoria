@@ -2,8 +2,12 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 
 use super::ai_client::AiClient;
+use crate::db;
 
 pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
+    let confidence_threshold = db::get_setting(conn, "classification_confidence_threshold")?
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.90);
     let mut stmt = conn.prepare(
         "SELECT id, filename, COALESCE(file_size, 0), COALESCE(mime_type, ''), COALESCE(current_path, '')
          FROM media_items WHERE status IN ('downloaded', 'metadata_extracted', 'classified')",
@@ -56,9 +60,13 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
                 "confidence": res.confidence
             })
             .to_string());
-            let class = if res.confidence >= 0.90 { res.category.clone() } else { "review".to_string() };
+            let class = if res.confidence >= confidence_threshold {
+                res.category.clone()
+            } else {
+                "review".to_string()
+            };
             let reason = if class == "review" {
-                if res.confidence < 0.90 {
+                if res.confidence < confidence_threshold {
                     Some("low_confidence".to_string())
                 } else {
                     Some("meme_or_non_legitimate".to_string())
@@ -70,7 +78,8 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
                 serde_json::json!({
                     "reason": r,
                     "aiCategory": res.category,
-                    "confidence": res.confidence
+                    "confidence": res.confidence,
+                    "threshold": confidence_threshold
                 })
                 .to_string()
             });

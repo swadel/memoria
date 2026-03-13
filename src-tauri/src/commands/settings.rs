@@ -1,5 +1,5 @@
 use anyhow::Result as AnyResult;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::Path;
 use tauri::State;
 
@@ -34,13 +34,6 @@ pub struct AppConfiguration {
 pub struct ResetSessionResult {
     pub deleted_generated_files: bool,
     pub removed_directories: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResetSessionInput {
-    #[serde(alias = "delete_generated_files")]
-    pub delete_generated_files: bool,
 }
 
 #[tauri::command]
@@ -215,13 +208,13 @@ pub async fn set_ai_task_model(
 
 #[tauri::command]
 pub async fn reset_session(
-    input: ResetSessionInput,
+    delete_generated_files: bool,
     state: State<'_, AppState>,
 ) -> Result<ResetSessionResult, String> {
     let conn = state.open_conn().map_err(|e| e.to_string())?;
     clear_pipeline_state(&conn).map_err(|e| e.to_string())?;
     let output = state.root_output();
-    let removed_directories = if input.delete_generated_files {
+    let removed_directories = if delete_generated_files {
         remove_generated_directories(&output)
             .await
             .map_err(|e| e.to_string())?
@@ -229,7 +222,7 @@ pub async fn reset_session(
         vec![]
     };
     Ok(ResetSessionResult {
-        deleted_generated_files: input.delete_generated_files,
+        deleted_generated_files: delete_generated_files,
         removed_directories,
     })
 }

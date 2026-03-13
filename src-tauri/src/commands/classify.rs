@@ -195,16 +195,19 @@ async fn stage_review_items(conn: &rusqlite::Connection, state: &AppState) -> Re
         let (id, filename, current_path) = row?;
         let current = PathBuf::from(&current_path);
         let target = review_dir.join(&filename);
+        let mut effective_path = current.clone();
         if current != target {
-            let _ = tokio::fs::copy(&current, &target).await;
-            conn.execute(
-                "UPDATE media_items SET current_path=?1, updated_at=CURRENT_TIMESTAMP WHERE id=?2",
-                params![target.to_string_lossy().to_string(), id],
-            )?;
+            if tokio::fs::copy(&current, &target).await.is_ok() {
+                effective_path = target.clone();
+                conn.execute(
+                    "UPDATE media_items SET current_path=?1, updated_at=CURRENT_TIMESTAMP WHERE id=?2",
+                    params![effective_path.to_string_lossy().to_string(), id],
+                )?;
+            }
         }
         // Best-effort thumbnail generation (especially useful for HEIC on Windows).
         let thumb_path = thumbs_dir.join(format!("{id}.jpg"));
-        let _ = exiftool::create_thumbnail_ffmpeg(&target, &thumb_path).await;
+        let _ = exiftool::create_thumbnail_ffmpeg(&effective_path, &thumb_path).await;
     }
     Ok(())
 }
