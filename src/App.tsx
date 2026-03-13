@@ -595,12 +595,28 @@ export function App() {
                           onClick={() => openLightbox(cluster.items, item)}
                           onError={(e) => {
                             const img = e.currentTarget as HTMLImageElement;
+                            const step = Number(img.dataset.fallbackStep ?? "0");
+                            if (step === 0) {
+                              img.dataset.fallbackStep = "1";
+                              img.src = getReviewThumbnailFileUrl(item, thumbVersion);
+                              return;
+                            }
+                            if (step === 1) {
+                              img.dataset.fallbackStep = "2";
+                              img.src = getReviewOriginalUrl(item, thumbVersion);
+                              return;
+                            }
+                            if (step === 2) {
+                              img.dataset.fallbackStep = "3";
+                              img.src = getReviewOriginalFileUrl(item, thumbVersion);
+                              return;
+                            }
                             if (img.dataset.fallbackApplied === "1") {
                               img.src = getThumbFallbackDataUrl(item.filename);
                               return;
                             }
                             img.dataset.fallbackApplied = "1";
-                            img.src = getReviewOriginalUrl(item, thumbVersion);
+                            img.src = getThumbFallbackDataUrl(item.filename);
                           }}
                         />
                         <strong>{item.filename}</strong>
@@ -1053,12 +1069,28 @@ function ReviewItemCard({
         onClick={() => onOpenPreview(item)}
         onError={(e) => {
           const img = e.currentTarget as HTMLImageElement;
+          const step = Number(img.dataset.fallbackStep ?? "0");
+          if (step === 0) {
+            img.dataset.fallbackStep = "1";
+            img.src = getReviewThumbnailFileUrl(item, thumbVersion);
+            return;
+          }
+          if (step === 1) {
+            img.dataset.fallbackStep = "2";
+            img.src = getReviewOriginalUrl(item, thumbVersion);
+            return;
+          }
+          if (step === 2) {
+            img.dataset.fallbackStep = "3";
+            img.src = getReviewOriginalFileUrl(item, thumbVersion);
+            return;
+          }
           if (img.dataset.fallbackApplied === "1") {
             img.src = getThumbFallbackDataUrl(item.filename);
             return;
           }
           img.dataset.fallbackApplied = "1";
-          img.src = getReviewOriginalUrl(item, thumbVersion);
+          img.src = getThumbFallbackDataUrl(item.filename);
         }}
       />
       <label className="row" htmlFor={`review-select-${item.id}`}>
@@ -1101,21 +1133,39 @@ function getReviewThumbnailUrl(item: MediaItem, version: number): string {
   return withCacheBust(safeConvertFileSrc(thumb), version);
 }
 
+function getReviewThumbnailFileUrl(item: MediaItem, version: number): string {
+  const p = item.currentPath;
+  const idx = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+  if (idx < 0) return getReviewOriginalFileUrl(item, version);
+  const sep = p[idx];
+  const dir = p.slice(0, idx);
+  const thumb = `${dir}${sep}.thumbnails${sep}${item.id}.jpg`;
+  return withCacheBust(toFileUrl(thumb), version);
+}
+
 function getReviewOriginalUrl(item: MediaItem, version: number): string {
   return withCacheBust(safeConvertFileSrc(item.currentPath), version);
+}
+
+function getReviewOriginalFileUrl(item: MediaItem, version: number): string {
+  return withCacheBust(toFileUrl(item.currentPath), version);
 }
 
 function safeConvertFileSrc(path: string): string {
   try {
     return convertFileSrc(path);
   } catch {
-    const normalized = path.replace(/\\/g, "/");
-    return /^[a-zA-Z]:\//.test(normalized) ? `file:///${normalized}` : `file://${normalized}`;
+    return toFileUrl(path);
   }
 }
 
 function withCacheBust(url: string, version: number): string {
   return `${url}${url.includes("?") ? "&" : "?"}v=${version}`;
+}
+
+function toFileUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return /^[a-zA-Z]:\//.test(normalized) ? `file:///${normalized}` : `file://${normalized}`;
 }
 
 function getThumbFallbackDataUrl(filename: string): string {
