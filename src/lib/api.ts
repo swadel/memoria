@@ -54,11 +54,11 @@ export function setWorkingDirectory(path: string) {
 }
 
 export function setOpenAiKey(apiKey: string) {
-  return invokeCommand<void>("set_openai_key", { api_key: apiKey });
+  return invokeCommand<void>("set_openai_key", { apiKey });
 }
 
 export function setAnthropicKey(apiKey: string) {
-  return invokeCommand<void>("set_anthropic_key", { api_key: apiKey });
+  return invokeCommand<void>("set_anthropic_key", { apiKey });
 }
 
 export function setAiTaskModel(

@@ -67,6 +67,18 @@ export class DesktopHarness {
   }
 
   async launch(): Promise<Page> {
+    if (this.browser?.isConnected()) {
+      const context = this.browser.contexts()[0] ?? (await this.browser.newContext());
+      const existing = context.pages()[0];
+      if (existing) {
+        await existing.bringToFront();
+        return existing;
+      }
+      const newPage = await context.newPage();
+      await newPage.bringToFront();
+      return newPage;
+    }
+
     const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
     this.appProcess = spawn(npmBin, ["run", "tauri", "dev"], {
       cwd: process.cwd(),
