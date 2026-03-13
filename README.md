@@ -4,13 +4,13 @@
 
 > Intelligently organize local photos and videos into a structured, event-based archive.
 
-Memoria is a Windows-first desktop application that indexes local photos and videos, enforces date metadata, lets you review/exclude short or unwanted videos, and organizes media into meaningful event folders — all with you in control of every decision.
+Memoria is a Windows-first desktop application that indexes local photos and videos, runs image-quality/burst review, lets you review/exclude short or unwanted videos, enforces date metadata, and organizes media into meaningful event folders — all with you in control of every decision.
 
 ---
 
 ## Why Memoria
 
-Large media libraries often have inconsistent dates and no useful folder structure. Memoria gives you a deterministic, auditable pipeline for indexing, date review, video review, grouping, and final filing.
+Large media libraries often have inconsistent dates and no useful folder structure. Memoria gives you a deterministic, auditable pipeline for indexing, image review, video review, date review, grouping, and final filing.
 
 The folder structure Memoria produces looks like this:
 
@@ -38,11 +38,18 @@ The folder structure Memoria produces looks like this:
 - Tracks item-level status in SQLite so every stage remains auditable
 - Supports `jpeg`, `png`, `heic`, `tif`, `mp4`, and `mov` (plus common related extensions)
 
+### Image Review (Pre-Video)
+- Dedicated Image Review phase immediately after indexing
+- Auto-flags low-quality/candidate images (`small_file`, `blurry`, `burst_shot`)
+- Detects burst groups and auto-selects a best frame (`is_burst_primary`)
+- Supports filtered review, bulk/individual exclude, restore, and burst actions (`Keep Best Only`, `Keep All`)
+- Image Review completion advances remaining active items to `image_reviewed`
+
 ### Date Metadata Enforcement
 Amazon Photos, Google Photos, and most photo management tools order images by the `DateTimeOriginal` EXIF field. If that field is missing, your photos end up out of order or dumped into an "unknown date" bucket.
 
-Memoria checks every indexed file. If `DateTimeOriginal` is missing or invalid (for example `1970:01:01`), it:
-1. Flags the item as `date_review_pending`
+Memoria checks every `video_reviewed` item. If `DateTimeOriginal` is missing or invalid (for example `1970:01:01`), it:
+1. Flags the item with `date_needs_review=1`
 2. Uses AI to estimate a likely date with confidence/reasoning
 3. Displays the item in Date Approval with a thumbnail preview
 4. Writes approved dates back to metadata only after user action
@@ -58,15 +65,16 @@ Memoria clusters your photos into events automatically:
 
 Photos not associated with any event go into a `[YEAR] - Misc` folder.
 
-### Video Review (Pre-Grouping)
-- Dedicated Video Review phase between Date Enforcement and Event Grouping
-- Reviews all `video/*` items with file size and duration metadata
-- Real-time filter sliders for "under X MB" and "under Y sec" candidates
+### Video Review (Pre-Date-Enforcement)
+- Dedicated Video Review phase between Image Review and Date Enforcement
+- Reviews all `video/*` items in `image_reviewed` state with file size and duration metadata
+- Mutually exclusive filters (`Filter by Size` or `Filter by Duration`)
 - Inline preview behavior:
   - short clips can play inline
   - longer clips open a modal/lightbox with full controls
 - Exclude actions move files to `/recycle/` with `status='excluded'` and audit log entries
-- Excluded videos are not included in event grouping until restored
+- Completing Video Review advances remaining active items to `video_reviewed`
+- Excluded videos are not included in downstream phases until restored
 
 ### Event Group Review and Reassignment
 - Event Group cards are clickable and open a dedicated detail view for that group
@@ -87,6 +95,7 @@ Memoria never hard-deletes media in the normal pipeline:
 - Finalization writes organized copies under `/organized/`
 - Exclude actions move files to `/recycle/` (soft delete), with restore support back to `/staging/`
 - Reset Session can clear app state with or without deleting generated folders
+- Reset + delete mode recreates empty `/staging`, `/organized`, and `/recycle` directories after cleanup
 - Audit log rows capture date approvals/skips, exclude/restore actions, and file finalization events
 
 ---
@@ -139,33 +148,41 @@ npm run tauri dev
 1. **Index Media**
    - Recursively scans Working Directory for supported files
    - Copies files to `/staging/`
-   - Extracts metadata and immediately runs missing-date detection
-   - Marks items as `metadata_extracted`, `date_review_pending`, or `date_verified`
+   - Extracts metadata and sets indexed state for downstream review
+   - Marks items as `indexed`
 
-2. **Date Enforcement**
-   - Date Approval page lists `date_review_pending` items
+2. **Image Review**
+   - Reviews `image/*` items in `indexed` state
+   - Applies auto-flagging and burst grouping metadata
+   - Supports exclude/restore and burst-specific actions
+   - Completion advances active items to `image_reviewed`
+
+3. **Video Review**
+   - Reviews `video/*` items in `image_reviewed` state
+   - Supports exclusive size/duration filtering and preview playback
+   - Exclude/restore moves files between `/staging/` and `/recycle/`
+   - Completion advances active items to `video_reviewed`
+
+4. **Date Enforcement**
+   - Date Approval page lists items where `date_needs_review=1`
    - Each card loads a thumbnail (existing `.thumbnails`, generated ffmpeg thumbnail, or image fallback)
    - `Approve/Edit` writes the selected date and sets `date_taken_source='user_override'`
    - `Skip` clears review-required state and marks item `date_verified`
 
-3. **Video Review**
-   - Reviews all videos after date verification and before grouping
-   - Supports slider-based filtering by size/duration and preview playback
-   - Exclude/restore moves files between `/staging/` and `/recycle/`
-   - Excluded items are marked `status='excluded'` and skipped during grouping
-
-4. **Group**
+5. **Group**
    - Groups `date_verified` items into event clusters
    - Creates event groups and links items with `status='grouped'`
    - Supports click-through detail review, multiselect item moves, soft delete/restore, manual group creation, and delete of empty groups only
 
-5. **Finalize**
+6. **Finalize**
    - Copies grouped items into `/organized/<year>/<year - event>/`
    - Updates each item to `status='filed'` and records audit events
 
-6. **Reset Session**
-   - Clears pipeline DB state
+7. **Reset Session**
+   - Clears pipeline DB state using a single transaction
    - Optionally deletes generated folders: `/staging`, `/organized`, `/recycle`
+   - Delete-files mode recreates those folders as empty directories
+   - Reset dialog now surfaces inline errors and only closes on success
 
 ---
 
@@ -236,7 +253,7 @@ memoria/
       db/                 # SQLite schema, migrations, queries
       models/             # Shared data structures
   src/                    # React frontend
-    App.tsx               # Main UI (Dashboard, Date Approval, Video Review, Events, Settings)
+    App.tsx               # Main UI (Dashboard, Image Review, Video Review, Date Approval, Events, Settings)
     lib/api.ts            # Tauri invoke wrappers
   vendor/                 # Bundled third-party binaries
     exiftool.exe

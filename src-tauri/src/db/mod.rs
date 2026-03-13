@@ -101,6 +101,8 @@ CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
     ensure_column(&conn, "media_items", "image_flags", "TEXT")?;
     ensure_column(&conn, "media_items", "sharpness_score", "REAL")?;
     ensure_media_items_status_migration(&conn)?;
+    ensure_audit_log_references_media_items(&conn)?;
+    cleanup_orphaned_old_tables(&conn)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_media_burst_group_id ON media_items(burst_group_id)",
         [],
@@ -440,6 +442,9 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 }
 
 fn ensure_media_items_status_migration(conn: &Connection) -> Result<()> {
+    if !table_exists(conn, "media_items")? {
+        return Ok(());
+    }
     let schema: Option<String> = conn
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='media_items'",
@@ -454,11 +459,16 @@ fn ensure_media_items_status_migration(conn: &Connection) -> Result<()> {
         return Ok(());
     }
 
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    if !table_exists(conn, "media_items_old")? {
+        conn.execute("ALTER TABLE media_items RENAME TO media_items_old", [])?;
+    } else {
+        eprintln!("warning: media_items_old already exists; reusing as migration source");
+    }
+
     conn.execute_batch(
         r#"
-BEGIN IMMEDIATE;
-ALTER TABLE media_items RENAME TO media_items_old;
-CREATE TABLE media_items (
+CREATE TABLE IF NOT EXISTS media_items (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     icloud_id           TEXT UNIQUE,
     filename            TEXT NOT NULL,
@@ -490,6 +500,16 @@ CREATE TABLE media_items (
     created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_media_status ON media_items(status);
+CREATE INDEX IF NOT EXISTS idx_media_date_review ON media_items(date_needs_review);
+CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
+CREATE INDEX IF NOT EXISTS idx_media_burst_group_id ON media_items(burst_group_id);
+        "#,
+    )?;
+    if table_exists(conn, "media_items_old")? {
+        conn.execute_batch(
+            r#"
+DELETE FROM media_items;
 INSERT INTO media_items(
     id, icloud_id, filename, original_path, current_path, final_path, file_size, mime_type, width, height,
     duration_secs, date_taken, date_taken_source, date_taken_confidence, date_needs_review, ai_date_estimate_raw,
@@ -509,15 +529,87 @@ SELECT
     COALESCE(burst_group_id, NULL), COALESCE(is_burst_primary, 0), COALESCE(image_flags, NULL), COALESCE(sharpness_score, NULL),
     COALESCE(video_width, NULL), COALESCE(video_height, NULL), COALESCE(video_codec, NULL), created_at, updated_at
 FROM media_items_old;
-DROP TABLE media_items_old;
-CREATE INDEX IF NOT EXISTS idx_media_status ON media_items(status);
-CREATE INDEX IF NOT EXISTS idx_media_date_review ON media_items(date_needs_review);
-CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
-CREATE INDEX IF NOT EXISTS idx_media_burst_group_id ON media_items(burst_group_id);
-COMMIT;
+DROP TABLE IF EXISTS media_items_old;
+        "#,
+        )?;
+    } else {
+        eprintln!("warning: media_items_old was not found; skipping migration copy/drop step");
+    }
+    conn.execute_batch("COMMIT;")?;
+    Ok(())
+}
+
+fn ensure_audit_log_references_media_items(conn: &Connection) -> Result<()> {
+    if !table_exists(conn, "audit_log")? {
+        return Ok(());
+    }
+    let sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='audit_log'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(sql) = sql else {
+        return Ok(());
+    };
+    if !sql.contains("media_items_old") {
+        return Ok(());
+    }
+
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    if !table_exists(conn, "audit_log_old")? {
+        conn.execute("ALTER TABLE audit_log RENAME TO audit_log_old", [])?;
+    } else {
+        eprintln!("warning: audit_log_old already exists; reusing as migration source");
+    }
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS audit_log (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_item_id       INTEGER REFERENCES media_items(id),
+    action              TEXT NOT NULL,
+    old_value           TEXT,
+    new_value           TEXT,
+    source              TEXT,
+    details             TEXT,
+    timestamp           TEXT DEFAULT CURRENT_TIMESTAMP
+);
         "#,
     )?;
+    if table_exists(conn, "audit_log_old")? {
+        conn.execute_batch(
+            r#"
+DELETE FROM audit_log;
+INSERT INTO audit_log(id, media_item_id, action, old_value, new_value, source, details, timestamp)
+SELECT id, media_item_id, action, old_value, new_value, source, details, timestamp
+FROM audit_log_old;
+DROP TABLE IF EXISTS audit_log_old;
+            "#,
+        )?;
+    } else {
+        eprintln!("warning: audit_log_old was not found; skipping migration copy/drop step");
+    }
+    conn.execute_batch("COMMIT;")?;
     Ok(())
+}
+
+fn cleanup_orphaned_old_tables(conn: &Connection) -> Result<()> {
+    for table in ["media_items_old", "audit_log_old"] {
+        if table_exists(conn, table)? {
+            conn.execute(&format!("DROP TABLE IF EXISTS {table}"), [])?;
+        }
+    }
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        [table_name],
+        |r| r.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 #[cfg(test)]
@@ -606,5 +698,33 @@ mod tests {
             .query_row("SELECT item_count FROM event_groups WHERE id=1", [], |r| r.get(0))
             .expect("count");
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn cleanup_orphaned_old_tables_drops_migration_artifacts() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("db init");
+        conn.execute("CREATE TABLE IF NOT EXISTS media_items_old(id INTEGER)", [])
+            .expect("create old table");
+        conn.execute("CREATE TABLE IF NOT EXISTS audit_log_old(id INTEGER)", [])
+            .expect("create old table");
+        cleanup_orphaned_old_tables(&conn).expect("cleanup");
+        assert!(!table_exists(&conn, "media_items_old").expect("media_items_old check"));
+        assert!(!table_exists(&conn, "audit_log_old").expect("audit_log_old check"));
+        cleanup_orphaned_old_tables(&conn).expect("cleanup idempotent");
+    }
+
+    #[test]
+    fn media_status_migration_skips_when_media_table_missing() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("db init");
+        conn.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             DROP TABLE IF EXISTS audit_log;
+             DROP TABLE IF EXISTS media_items;
+             PRAGMA foreign_keys=ON;",
+        )
+        .expect("drop media tables");
+        ensure_media_items_status_migration(&conn).expect("migration should skip");
     }
 }

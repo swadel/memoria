@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video";
+type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "reset-error" | "reset-slow";
 
 type DateEstimate = {
   mediaItemId: number;
@@ -262,7 +262,8 @@ function buildState(profile: BrowserFixtureProfile) {
     eventGroupItemsByGroupId,
     imageItems,
     videoItems,
-    nextGroupId: 402
+    nextGroupId: 402,
+    resetBehavior: profile === "reset-error" ? "error" : profile === "reset-slow" ? "slow" : "normal"
   };
 }
 
@@ -439,6 +440,43 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               return Promise.resolve(ids.length);
             }
             case "reset_session":
+              if (state.resetBehavior === "error") {
+                return Promise.reject(new Error("no such table: main.media_items_old"));
+              }
+              if (state.resetBehavior === "slow") {
+                return new Promise((resolve) =>
+                  setTimeout(
+                    () => {
+                      state.dateItems = [];
+                      state.eventGroups = [];
+                      state.stats = {
+                        ...state.stats,
+                        total: 0,
+                        indexed: 0,
+                        imageReview: 0,
+                        imageVerified: 0,
+                        dateReview: 0,
+                        dateNeedsReview: 0,
+                        dateVerified: 0,
+                        grouped: 0,
+                        filed: 0,
+                        imageFlaggedPending: 0,
+                        imagePhaseState: "pending",
+                        videoTotal: 0,
+                        videoFlagged: 0,
+                        videoExcluded: 0,
+                        videoUnreviewedFlagged: 0,
+                        videoPhaseState: "pending"
+                      };
+                      resolve({
+                        deletedGeneratedFiles: Boolean(args?.deleteGeneratedFiles),
+                        removedDirectories: Boolean(args?.deleteGeneratedFiles) ? ["staging", "organized", "recycle"] : []
+                      });
+                    },
+                    350
+                  )
+                );
+              }
               state.dateItems = [];
               state.eventGroups = [];
               state.stats = {

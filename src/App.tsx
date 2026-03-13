@@ -115,6 +115,8 @@ export function App() {
   });
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
+  const [resetError, setResetError] = useState<string>("");
+  const [resetMode, setResetMode] = useState<"delete" | "state" | null>(null);
   const [showAddGroupForm, setShowAddGroupForm] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupError, setNewGroupError] = useState("");
@@ -270,6 +272,8 @@ export function App() {
   }
 
   async function onResetSession(deleteGeneratedFiles: boolean) {
+    setResetError("");
+    setResetMode(deleteGeneratedFiles ? "delete" : "state");
     setBusyAction("reset");
     try {
       const result = await resetSession(deleteGeneratedFiles);
@@ -282,7 +286,9 @@ export function App() {
       }
     } catch (err) {
       setMessage(`Reset session failed: ${String(err)}`);
+      setResetError(`Reset failed: ${String(err)}. Please try again or restart the app.`);
     } finally {
+      setResetMode(null);
       setBusyAction(null);
     }
   }
@@ -540,7 +546,10 @@ export function App() {
                 data-testid="pipeline-reset-session"
                 className="secondaryBtn"
                 disabled={busyAction !== null}
-                onClick={() => setShowResetPrompt(true)}
+                onClick={() => {
+                  setResetError("");
+                  setShowResetPrompt(true);
+                }}
               >
                 {busyAction === "reset" ? "Resetting..." : "Reset Session"}
               </button>
@@ -1037,17 +1046,27 @@ export function App() {
       )}
 
       {showResetPrompt && (
-        <div className="lightboxOverlay" data-testid="reset-session-overlay" onClick={() => setShowResetPrompt(false)}>
+        <div className="lightboxOverlay" data-testid="reset-session-overlay" onClick={() => (busyAction === "reset" ? undefined : setShowResetPrompt(false))}>
           <div className="lightboxCard" role="dialog" aria-label="Reset session confirmation" data-testid="reset-session-dialog" onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0 }}>Reset Session?</h3>
             <p className="muted">This clears pipeline data and keeps your configuration settings.</p>
             <p className="muted">Choose whether to also delete generated files in output folders (`staging`, `organized`, `recycle`).</p>
+            {resetError ? (
+              <div className="danger" data-testid="reset-session-error" style={{ marginBottom: 8 }}>
+                {resetError}
+              </div>
+            ) : null}
+            {busyAction === "reset" ? (
+              <div className="muted" data-testid="reset-session-loading" style={{ marginBottom: 8 }}>
+                ⏳ Reset in progress...
+              </div>
+            ) : null}
             <div className="row">
               <button data-testid="reset-session-delete-files" className="primaryBtn" disabled={busyAction !== null} onClick={() => void onResetSession(true)}>
-                Reset and Delete Files
+                {resetMode === "delete" && busyAction === "reset" ? "Resetting..." : "Reset and Delete Files"}
               </button>
               <button data-testid="reset-session-keep-files" className="secondaryBtn" disabled={busyAction !== null} onClick={() => void onResetSession(false)}>
-                Reset App State Only
+                {resetMode === "state" && busyAction === "reset" ? "Resetting..." : "Reset App State Only"}
               </button>
               <button data-testid="reset-session-cancel" className="secondaryBtn" disabled={busyAction !== null} onClick={() => setShowResetPrompt(false)}>
                 Cancel

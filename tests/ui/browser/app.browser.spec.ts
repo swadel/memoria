@@ -88,4 +88,52 @@ test.describe("Memoria browser UI", () => {
     await page.getByTestId("tab-events").click();
     await expect(page.getByTestId("event-groups-card")).toBeVisible();
   });
+
+  test("reset delete files shows loading and disables actions", async ({ page, context }) => {
+    const resetPage = await context.newPage();
+    await installBrowserApiMock(resetPage, "reset-slow");
+    await resetPage.goto("/");
+    await resetPage.getByTestId("pipeline-reset-session").click();
+    const deleteBtn = resetPage.getByTestId("reset-session-delete-files");
+    const keepBtn = resetPage.getByTestId("reset-session-keep-files");
+    await deleteBtn.click();
+    await expect(resetPage.getByTestId("reset-session-loading")).toBeVisible();
+    await expect(deleteBtn).toBeDisabled();
+    await expect(keepBtn).toBeDisabled();
+    await expect(resetPage.getByTestId("reset-session-dialog")).toHaveCount(0);
+    await resetPage.close();
+  });
+
+  test("reset app state only shows loading and succeeds", async ({ page, context }) => {
+    const resetPage = await context.newPage();
+    await installBrowserApiMock(resetPage, "reset-slow");
+    await resetPage.goto("/");
+    await expect(resetPage.getByTestId("stat-total")).toContainText("8");
+    await resetPage.getByTestId("pipeline-reset-session").click();
+    const keepBtn = resetPage.getByTestId("reset-session-keep-files");
+    await keepBtn.click();
+    await expect(resetPage.getByTestId("reset-session-loading")).toBeVisible();
+    await expect(resetPage.getByTestId("stat-total")).toContainText("0");
+    await resetPage.close();
+  });
+
+  test("reset error keeps dialog open with inline message", async ({ page, context }) => {
+    const resetPage = await context.newPage();
+    await installBrowserApiMock(resetPage, "reset-error");
+    await resetPage.goto("/");
+    await resetPage.getByTestId("pipeline-reset-session").click();
+    await resetPage.getByTestId("reset-session-delete-files").click();
+    await expect(resetPage.getByTestId("reset-session-dialog")).toBeVisible();
+    await expect(resetPage.getByTestId("reset-session-error")).toContainText("Reset failed:");
+    await expect(resetPage.getByTestId("reset-session-error")).toContainText("media_items_old");
+    await resetPage.close();
+  });
+
+  test("reset cancel closes dialog without running reset", async ({ page }) => {
+    await expect(page.getByTestId("stat-total")).toContainText("8");
+    await page.getByTestId("pipeline-reset-session").click();
+    await page.getByTestId("reset-session-cancel").click();
+    await expect(page.getByTestId("reset-session-dialog")).toHaveCount(0);
+    await expect(page.getByTestId("stat-total")).toContainText("8");
+  });
 });

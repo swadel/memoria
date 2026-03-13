@@ -199,13 +199,20 @@ pub async fn reset_session(
     delete_generated_files: bool,
     state: State<'_, AppState>,
 ) -> Result<ResetSessionResult, String> {
-    let conn = state.open_conn().map_err(|e| e.to_string())?;
-    clear_pipeline_state(&conn).map_err(|e| e.to_string())?;
-    let output = state.root_output();
+    let mut conn = state.open_conn().map_err(|e| e.to_string())?;
+    reset_session_impl(&mut conn, &state.root_output(), delete_generated_files)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn reset_session_impl(
+    conn: &mut rusqlite::Connection,
+    output_root: &Path,
+    delete_generated_files: bool,
+) -> AnyResult<ResetSessionResult> {
+    clear_pipeline_state(conn)?;
     let removed_directories = if delete_generated_files {
-        remove_generated_directories(&output)
-            .await
-            .map_err(|e| e.to_string())?
+        remove_generated_directories(output_root).await?
     } else {
         vec![]
     };
@@ -215,13 +222,16 @@ pub async fn reset_session(
     })
 }
 
-fn clear_pipeline_state(conn: &rusqlite::Connection) -> AnyResult<()> {
-    conn.execute_batch(
-        "DELETE FROM audit_log;
-         DELETE FROM media_items;
-         DELETE FROM event_groups;
-         DELETE FROM download_sessions;",
-    )?;
+fn clear_pipeline_state(conn: &mut rusqlite::Connection) -> AnyResult<()> {
+    let tx = conn.transaction()?;
+    delete_table_rows_if_exists(&tx, "audit_log")?;
+    delete_table_rows_if_exists(&tx, "event_groups")?;
+    delete_table_rows_if_exists(&tx, "download_sessions")?;
+    delete_table_rows_if_exists(&tx, "media_items")?;
+    if table_exists(&tx, "media_items_old")? {
+        tx.execute("DROP TABLE IF EXISTS media_items_old", [])?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -233,8 +243,26 @@ async fn remove_generated_directories(output_root: &Path) -> AnyResult<Vec<Strin
             tokio::fs::remove_dir_all(&path).await?;
             removed.push(path.to_string_lossy().to_string());
         }
+        tokio::fs::create_dir_all(&path).await?;
     }
     Ok(removed)
+}
+
+fn table_exists(conn: &rusqlite::Connection, table_name: &str) -> AnyResult<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        [table_name],
+        |r| r.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn delete_table_rows_if_exists(conn: &rusqlite::Connection, table_name: &str) -> AnyResult<()> {
+    if !table_exists(conn, table_name)? {
+        return Ok(());
+    }
+    conn.execute(&format!("DELETE FROM {table_name}"), [])?;
+    Ok(())
 }
 
 fn read_task_model(
@@ -315,7 +343,7 @@ mod tests {
     #[test]
     fn clear_pipeline_state_preserves_settings() {
         let db_path = temp_db_path();
-        let conn = init_db(&db_path).expect("init db");
+        let mut conn = init_db(&db_path).expect("init db");
         db::set_setting(&conn, "working_directory", r"C:\Photos\Inbox").expect("set working");
         db::set_setting(&conn, "output_directory", r"C:\Memoria\Output").expect("set output");
         conn.execute(
@@ -335,7 +363,7 @@ mod tests {
         )
         .expect("insert session");
 
-        clear_pipeline_state(&conn).expect("clear state");
+        clear_pipeline_state(&mut conn).expect("clear state");
 
         let media_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0))
@@ -381,12 +409,161 @@ mod tests {
 
         let removed = remove_generated_directories(&root).await.expect("remove generated");
         assert_eq!(removed.len(), 3);
-        assert!(!staging.exists());
-        assert!(!organized.exists());
-        assert!(!recycle.exists());
+        assert!(staging.exists());
+        assert!(organized.exists());
+        assert!(recycle.exists());
+        assert_eq!(fs::read_dir(&staging).expect("read staging").count(), 0);
+        assert_eq!(fs::read_dir(&organized).expect("read organized").count(), 0);
+        assert_eq!(fs::read_dir(&recycle).expect("read recycle").count(), 0);
         assert!(keep_dir.exists());
         assert!(keep_dir.join("safe.txt").exists());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn clear_pipeline_state_succeeds_without_media_items_old() {
+        let db_path = temp_db_path();
+        let mut conn = init_db(&db_path).expect("init db");
+        clear_pipeline_state(&mut conn).expect("clear pipeline");
+        let has_old = table_exists(&conn, "media_items_old").expect("table exists");
+        assert!(!has_old);
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn clear_pipeline_state_rolls_back_on_partial_failure() {
+        let db_path = temp_db_path();
+        let mut conn = init_db(&db_path).expect("init db");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, status) VALUES(?1, ?2, 'indexed')",
+            ["rollback-1", "IMG_1.JPG"],
+        )
+        .expect("insert media");
+        let media_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO audit_log(media_item_id, action, source) VALUES(?1, 'seeded', 'test')",
+            [media_id],
+        )
+        .expect("insert audit");
+        conn.execute(
+            "INSERT INTO event_groups(year, name, folder_name) VALUES(2026, 'Trip', '2026 - Trip')",
+            [],
+        )
+        .expect("insert group");
+        conn.execute(
+            "INSERT INTO download_sessions(date_range_start, date_range_end, status, output_directory)
+             VALUES('local', 'local', 'completed', ?1)",
+            [r"C:\Memoria\Output"],
+        )
+        .expect("insert session");
+        conn.execute(
+            "CREATE TRIGGER fail_event_group_delete BEFORE DELETE ON event_groups
+             BEGIN
+                SELECT RAISE(ABORT, 'forced-delete-failure');
+             END;",
+            [],
+        )
+        .expect("create trigger");
+
+        let err = clear_pipeline_state(&mut conn).expect_err("rollback should fail");
+        assert!(err.to_string().contains("forced-delete-failure"));
+
+        let media_count: i64 = conn.query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0)).expect("media count");
+        let audit_count: i64 = conn.query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0)).expect("audit count");
+        let group_count: i64 = conn.query_row("SELECT COUNT(*) FROM event_groups", [], |r| r.get(0)).expect("group count");
+        let session_count: i64 = conn.query_row("SELECT COUNT(*) FROM download_sessions", [], |r| r.get(0)).expect("session count");
+        assert_eq!(media_count, 1);
+        assert_eq!(audit_count, 1);
+        assert_eq!(group_count, 1);
+        assert_eq!(session_count, 1);
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn reset_session_impl_state_only_does_not_modify_files() {
+        let db_path = temp_db_path();
+        let mut conn = init_db(&db_path).expect("init db");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, status) VALUES(?1, ?2, 'indexed')",
+            ["state-only-1", "IMG_1.JPG"],
+        )
+        .expect("insert media");
+        let root = std::env::temp_dir().join(format!("memoria-reset-state-only-{}", rand::random::<u64>()));
+        let staging = root.join("staging");
+        let _ = fs::create_dir_all(&staging);
+        fs::write(staging.join("keep.txt"), b"keep").expect("write keep");
+
+        let result = reset_session_impl(&mut conn, &root, false).await.expect("reset");
+        assert!(!result.deleted_generated_files);
+        assert!(staging.join("keep.txt").exists());
+
+        let media_count: i64 = conn.query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0)).expect("media count");
+        assert_eq!(media_count, 0);
+
+        let _ = fs::remove_dir_all(root);
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn reset_session_impl_delete_files_clears_rows_and_recreates_empty_dirs() {
+        let db_path = temp_db_path();
+        let mut conn = init_db(&db_path).expect("init db");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, status) VALUES(?1, ?2, 'indexed')",
+            ["delete-files-1", "IMG_1.JPG"],
+        )
+        .expect("insert media");
+        let media_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO audit_log(media_item_id, action, source) VALUES(?1, 'seeded', 'test')",
+            [media_id],
+        )
+        .expect("insert audit");
+        conn.execute(
+            "INSERT INTO event_groups(year, name, folder_name) VALUES(2026, 'Trip', '2026 - Trip')",
+            [],
+        )
+        .expect("insert group");
+        conn.execute(
+            "INSERT INTO download_sessions(date_range_start, date_range_end, status, output_directory)
+             VALUES('local', 'local', 'completed', ?1)",
+            [r"C:\Memoria\Output"],
+        )
+        .expect("insert session");
+        let root = std::env::temp_dir().join(format!("memoria-reset-delete-files-{}", rand::random::<u64>()));
+        let staging = root.join("staging");
+        let organized = root.join("organized");
+        let recycle = root.join("recycle");
+        fs::create_dir_all(&staging).expect("create staging");
+        fs::create_dir_all(&organized).expect("create organized");
+        fs::create_dir_all(&recycle).expect("create recycle");
+        fs::write(staging.join("old.bin"), b"x").expect("write staging");
+        fs::write(organized.join("old.bin"), b"x").expect("write organized");
+        fs::write(recycle.join("old.bin"), b"x").expect("write recycle");
+
+        let result = reset_session_impl(&mut conn, &root, true).await.expect("reset");
+        assert!(result.deleted_generated_files);
+        assert!(staging.exists() && organized.exists() && recycle.exists());
+        assert_eq!(fs::read_dir(&staging).expect("read staging").count(), 0);
+        assert_eq!(fs::read_dir(&organized).expect("read organized").count(), 0);
+        assert_eq!(fs::read_dir(&recycle).expect("read recycle").count(), 0);
+
+        let media_count: i64 = conn.query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0)).expect("media count");
+        let audit_count: i64 = conn.query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0)).expect("audit count");
+        let group_count: i64 = conn.query_row("SELECT COUNT(*) FROM event_groups", [], |r| r.get(0)).expect("group count");
+        let session_count: i64 = conn.query_row("SELECT COUNT(*) FROM download_sessions", [], |r| r.get(0)).expect("session count");
+        assert_eq!(media_count, 0);
+        assert_eq!(audit_count, 0);
+        assert_eq!(group_count, 0);
+        assert_eq!(session_count, 0);
+
+        let _ = fs::remove_dir_all(root);
+        drop(conn);
+        let _ = fs::remove_file(db_path);
     }
 }
