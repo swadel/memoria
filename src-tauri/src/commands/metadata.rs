@@ -35,17 +35,38 @@ pub fn apply_date_approval(media_item_id: i64, date: Option<String>, state: Stat
 pub fn get_date_media_thumbnail(media_item_id: i64, state: State<'_, AppState>) -> Result<Option<String>, String> {
     tauri::async_runtime::block_on(async {
         let conn = state.open_conn().map_err(|e| e.to_string())?;
-        let current_path: String = conn
+        let (filename, current_path, original_path): (String, String, String) = conn
             .query_row(
-                "SELECT COALESCE(current_path, '') FROM media_items WHERE id=?1",
+                "SELECT filename, COALESCE(current_path, ''), COALESCE(original_path, '') FROM media_items WHERE id=?1",
                 [media_item_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .map_err(|e| e.to_string())?;
-        get_date_media_thumbnail_for_path(PathBuf::from(current_path), media_item_id)
+        let root_output = state.root_output();
+        let resolved = resolve_media_path(&filename, &current_path, &original_path, &root_output);
+        get_date_media_thumbnail_for_path(resolved, media_item_id)
             .await
             .map_err(|e| e.to_string())
     })
+}
+
+fn resolve_media_path(filename: &str, current_path: &str, original_path: &str, root_output: &Path) -> PathBuf {
+    let mut candidates = Vec::<PathBuf>::new();
+    if !current_path.trim().is_empty() {
+        candidates.push(PathBuf::from(current_path));
+    }
+    if !original_path.trim().is_empty() {
+        candidates.push(PathBuf::from(original_path));
+    }
+    if !filename.trim().is_empty() {
+        candidates.push(root_output.join("staging").join(filename));
+    }
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    PathBuf::from(current_path)
 }
 
 async fn get_date_media_thumbnail_for_path(
@@ -69,7 +90,10 @@ async fn get_date_media_thumbnail_for_path(
         }
     }
 
-    read_as_data_url(&current).await
+    if is_directly_renderable_image(&current) {
+        return read_as_data_url(&current).await;
+    }
+    Ok(None)
 }
 
 fn thumbnail_candidates(current: &Path, media_item_id: i64) -> Vec<PathBuf> {
@@ -111,6 +135,9 @@ async fn generate_thumbnail_if_possible(current: &Path, media_item_id: i64) -> R
 }
 
 async fn read_as_data_url(path: &Path) -> Result<Option<String>> {
+    if !is_directly_renderable_image(path) {
+        return Ok(None);
+    }
     if !path.exists() {
         return Ok(None);
     }
@@ -129,7 +156,16 @@ fn is_copyable_image(path: &Path) -> bool {
         .and_then(|v| v.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "tif" | "tiff")
+    matches!(ext.as_str(), "jpg" | "jpeg" | "png")
+}
+
+fn is_directly_renderable_image(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp")
 }
 
 fn mime_for_path(path: &Path) -> &'static str {
@@ -217,6 +253,21 @@ mod tests {
 
         drop(conn);
         let _ = fs::remove_file(db_path);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn does_not_return_unrenderable_original_media_payload() {
+        let root = std::env::temp_dir().join(format!("memoria-date-thumb-unrenderable-{}", rand::random::<u64>()));
+        let _ = fs::create_dir_all(&root);
+        let media_path = root.join("sample.mov");
+        fs::write(&media_path, b"not-a-real-video").expect("write fake mov");
+
+        let result = get_date_media_thumbnail_for_path(media_path, 99)
+            .await
+            .expect("thumbnail lookup");
+        assert!(result.is_none());
+
         let _ = fs::remove_dir_all(root);
     }
 }

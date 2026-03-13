@@ -32,6 +32,14 @@ function buildState(profile: BrowserFixtureProfile) {
             aiDate: "2026-03-11",
             confidence: 0.82,
             reasoning: "Fixture seeded date estimate"
+          },
+          {
+            mediaItemId: 302,
+            filename: "date_review_fixture_2.png",
+            currentDate: null,
+            aiDate: "2026-03-12",
+            confidence: 0.79,
+            reasoning: "Fixture seeded date estimate 2"
           }
         ];
 
@@ -147,14 +155,14 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                 removedDirectories: Boolean(args?.deleteGeneratedFiles) ? ["staging", "organized", "recycle"] : []
               });
             case "apply_date_approval": {
-              const id = Number(args?.media_item_id ?? -1);
+              const id = Number(args?.mediaItemId ?? args?.media_item_id ?? -1);
               state.dateItems = state.dateItems.filter((item: DateEstimate) => item.mediaItemId !== id);
               state.stats.dateNeedsReview = state.dateItems.length;
               state.stats.dateVerified += 1;
               return Promise.resolve();
             }
             case "rename_event_group": {
-              const id = Number(args?.group_id ?? -1);
+              const id = Number(args?.groupId ?? args?.group_id ?? -1);
               const name = String(args?.name ?? "");
               state.eventGroups = state.eventGroups.map((group: EventGroup) =>
                 group.id === id ? { ...group, name, folderName: `${group.year} - ${name}` } : group

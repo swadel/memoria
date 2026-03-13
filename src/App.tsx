@@ -293,8 +293,18 @@ export function App() {
                 key={item.mediaItemId}
                 item={item}
                 onApply={async (date) => {
-                  await applyDateApproval(item.mediaItemId, date);
-                  await refreshAll();
+                  try {
+                    await applyDateApproval(item.mediaItemId, date);
+                    await refreshAll();
+                    setMessage(
+                      date
+                        ? `Approved date ${date} for ${item.filename}.`
+                        : `Skipped date approval for ${item.filename}.`
+                    );
+                  } catch (err) {
+                    setMessage(`Date approval failed for ${item.filename}: ${String(err)}`);
+                    throw err;
+                  }
                 }}
               />
             ))}
@@ -542,6 +552,7 @@ function StatCard({ label, value, danger, testId }: { label: string; value: numb
 function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: string | null) => Promise<void> }) {
   const [value, setValue] = useState(item.aiDate ?? "");
   const [thumbSrc, setThumbSrc] = useState<string>("");
+  const [busyAction, setBusyAction] = useState<"approve" | "skip" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -561,6 +572,18 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
     };
   }, [item.mediaItemId]);
 
+  async function handleApply(nextDate: string | null, action: "approve" | "skip") {
+    if (busyAction) return;
+    setBusyAction(action);
+    try {
+      await onApply(nextDate);
+    } catch {
+      // Parent updates user-facing error state.
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   return (
     <div className="item" data-testid={`date-item-${item.mediaItemId}`}>
       <img
@@ -568,6 +591,13 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
         data-testid={`date-thumb-${item.mediaItemId}`}
         src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)}
         alt={item.filename}
+        onError={(e) => {
+          const img = e.currentTarget;
+          const fallback = getDateThumbFallbackDataUrl(item.filename);
+          if (img.src !== fallback) {
+            img.src = fallback;
+          }
+        }}
       />
       <strong>{item.filename}</strong>
       <div className="muted">Current: {item.currentDate ?? "(missing)"}</div>
@@ -575,11 +605,23 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
       <div className="muted">{item.reasoning}</div>
       <div className="row">
         <input type="date" data-testid={`date-input-${item.mediaItemId}`} value={value} onChange={(e) => setValue(e.target.value)} />
-        <button data-testid={`date-approve-${item.mediaItemId}`} onClick={() => onApply(value || null)}>
-          Approve/Edit
+        <button
+          data-testid={`date-approve-${item.mediaItemId}`}
+          disabled={busyAction !== null}
+          onClick={() => {
+            void handleApply(value || null, "approve");
+          }}
+        >
+          {busyAction === "approve" ? "Approving..." : "Approve/Edit"}
         </button>
-        <button data-testid={`date-skip-${item.mediaItemId}`} onClick={() => onApply(null)}>
-          Skip
+        <button
+          data-testid={`date-skip-${item.mediaItemId}`}
+          disabled={busyAction !== null}
+          onClick={() => {
+            void handleApply(null, "skip");
+          }}
+        >
+          {busyAction === "skip" ? "Skipping..." : "Skip"}
         </button>
       </div>
     </div>

@@ -30,6 +30,42 @@ test.describe("Memoria desktop UI", () => {
     await expect(page.getByTestId("event-groups-card")).toContainText("Ski Trip");
   });
 
+  test("date approval shows rendered thumbnails and approve/skip actions work", async () => {
+    const review1 = `${harness.outputRoot}\\staging\\IMG_DATE_REVIEW_001.png`;
+    const review2 = `${harness.outputRoot}\\staging\\IMG_DATE_REVIEW_002.png`;
+    expect(existsSync(review1)).toBeTruthy();
+    expect(existsSync(review2)).toBeTruthy();
+
+    const page = await harness.launch();
+    await page.getByTestId("tab-dates").click();
+
+    const dateItems = page.locator("[data-testid^='date-item-']");
+    await expect(dateItems).toHaveCount(2);
+
+    const firstThumb = page.locator("[data-testid^='date-thumb-']").first();
+    await expect(firstThumb).toBeVisible();
+    await expect
+      .poll(async () => {
+        return await firstThumb.evaluate((img) => {
+          const el = img as HTMLImageElement;
+          const visuallyDecoded = el.complete && el.naturalWidth >= 100 && el.naturalHeight >= 60;
+          const src = el.currentSrc || el.src;
+          const isFallbackSvg = src.includes("image/svg+xml");
+          return visuallyDecoded && !isFallbackSvg;
+        });
+      })
+      .toBeTruthy();
+
+    await page.getByTestId("date-input-2").fill("2026-01-15");
+    await page.getByTestId("date-approve-2").click();
+    await expect(dateItems).toHaveCount(1);
+    await expect(page.getByTestId("status-pill")).toContainText("Approved date 2026-01-15");
+
+    await page.getByTestId("date-skip-3").click();
+    await expect(dateItems).toHaveCount(0);
+    await expect(page.getByTestId("status-pill")).toContainText("Skipped date approval");
+  });
+
   test("resets session and optionally deletes generated output directories", async () => {
     const page = await harness.launch();
     await page.getByTestId("tab-dashboard").click();

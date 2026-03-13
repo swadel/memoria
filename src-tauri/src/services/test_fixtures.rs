@@ -1,18 +1,11 @@
 use anyhow::Result;
+use image::{ImageBuffer, ImageFormat, Rgb};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::db;
-
-const TINY_PNG: &[u8] = &[
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
-    0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
-    0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
-    0xCF, 0x00, 0x00, 0x02, 0x05, 0x01, 0x02, 0xA7, 0x69, 0xC2, 0xCF, 0x00, 0x00, 0x00, 0x00,
-    0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
-];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,7 +41,18 @@ pub fn seed_fixture(
     let mut event_groups = 0_i64;
 
     media_count += insert_indexed(conn, &staging_dir.join("IMG_INDEXED_001.png"))?;
-    media_count += insert_date_review_item(conn, &staging_dir.join("IMG_DATE_REVIEW_001.png"))?;
+    media_count += insert_date_review_item(
+        conn,
+        &staging_dir.join("IMG_DATE_REVIEW_001.png"),
+        "IMG_DATE_REVIEW_001.png",
+        "2026-03-11",
+    )?;
+    media_count += insert_date_review_item(
+        conn,
+        &staging_dir.join("IMG_DATE_REVIEW_002.png"),
+        "IMG_DATE_REVIEW_002.png",
+        "2026-03-12",
+    )?;
     media_count += insert_date_verified(conn, &staging_dir.join("IMG_VERIFIED_001.png"))?;
 
     match profile {
@@ -96,11 +100,33 @@ fn reset_fixture_data(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn write_tiny_image(path: &Path) -> Result<()> {
+fn write_fixture_image(path: &Path, seed: u8) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, TINY_PNG)?;
+    let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(320, 180);
+    for (x, y, pixel) in img.enumerate_pixels_mut() {
+        let r = ((x as u16 + seed as u16 * 3) % 255) as u8;
+        let g = ((y as u16 * 2 + seed as u16 * 5) % 255) as u8;
+        let b = (((x + y) as u16 + seed as u16 * 7) % 255) as u8;
+        *pixel = Rgb([r, g, b]);
+    }
+    img.save_with_format(path, ImageFormat::Png)?;
+    Ok(())
+}
+
+fn write_fixture_thumbnail(path: &Path, seed: u8) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(200, 120);
+    for (x, y, pixel) in img.enumerate_pixels_mut() {
+        let r = ((x as u16 + seed as u16 * 11) % 255) as u8;
+        let g = ((y as u16 + seed as u16 * 13) % 255) as u8;
+        let b = (((x * 2 + y * 3) as u16 + seed as u16) % 255) as u8;
+        *pixel = Rgb([r, g, b]);
+    }
+    img.save_with_format(path, ImageFormat::Jpeg)?;
     Ok(())
 }
 
@@ -116,10 +142,12 @@ fn insert_media_row(
     final_path: Option<&Path>,
     error_message: Option<&str>,
 ) -> Result<i64> {
-    write_tiny_image(current_path)?;
+    let seed = filename.bytes().fold(0u8, |acc, v| acc.wrapping_add(v));
+    write_fixture_image(current_path, seed)?;
     if let Some(fp) = final_path {
-        write_tiny_image(fp)?;
+        write_fixture_image(fp, seed.wrapping_add(17))?;
     }
+    let file_size = fs::metadata(current_path)?.len() as i64;
     conn.execute(
         "INSERT INTO media_items(
             icloud_id, filename, original_path, current_path, final_path, file_size, mime_type, width, height,
@@ -131,7 +159,7 @@ fn insert_media_row(
             current_path.to_string_lossy().to_string(),
             current_path.to_string_lossy().to_string(),
             final_path.map(|p| p.to_string_lossy().to_string()),
-            TINY_PNG.len() as i64,
+            file_size,
             "image/png",
             if date_needs_review { 1 } else { 0 },
             ai_date_estimate_raw,
@@ -161,17 +189,17 @@ fn insert_indexed(conn: &Connection, path: &Path) -> Result<i64> {
     Ok(1)
 }
 
-fn insert_date_review_item(conn: &Connection, path: &Path) -> Result<i64> {
-    insert_media_row(
+fn insert_date_review_item(conn: &Connection, path: &Path, filename: &str, ai_date: &str) -> Result<i64> {
+    let id = insert_media_row(
         conn,
-        "date_review_fixture.png",
+        filename,
         path,
         "date_review_pending",
         None,
         true,
         Some(
             serde_json::json!({
-                "ai_date":"2026-03-11",
+                "ai_date": ai_date,
                 "confidence":0.82,
                 "reasoning":"Fixture seeded date estimate"
             })
@@ -181,6 +209,10 @@ fn insert_date_review_item(conn: &Connection, path: &Path) -> Result<i64> {
         None,
         None,
     )?;
+    if let Some(parent) = path.parent() {
+        let thumb = parent.join(".thumbnails").join(format!("{id}.jpg"));
+        write_fixture_thumbnail(&thumb, id as u8)?;
+    }
     Ok(1)
 }
 

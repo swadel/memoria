@@ -26,11 +26,18 @@ test.describe("Memoria browser UI smoke", () => {
 
   test("handles date approval and event renaming", async ({ page }) => {
     await page.getByTestId("tab-dates").click();
+    const dateItems = page.locator("[data-testid^='date-item-']");
+    await expect(dateItems).toHaveCount(2);
     await expect(page.getByTestId("date-item-301")).toBeVisible();
     await expect(page.getByTestId("date-thumb-301")).toBeVisible();
     await expect(page.getByTestId("date-thumb-301")).toHaveAttribute("src", /data:image\/png;base64/);
+    await page.getByTestId("date-input-301").fill("2026-01-15");
     await page.getByTestId("date-approve-301").click();
-    await expect(page.getByTestId("status-pill")).not.toContainText("failed");
+    await expect(dateItems).toHaveCount(1);
+    await expect(page.getByTestId("status-pill")).toContainText("Approved date 2026-01-15");
+    await page.getByTestId("date-skip-302").click();
+    await expect(dateItems).toHaveCount(0);
+    await expect(page.getByTestId("status-pill")).toContainText("Skipped date approval");
 
     await page.getByTestId("tab-events").click();
     await page.getByTestId("event-rename-input-401").fill("Playwright Renamed Event");

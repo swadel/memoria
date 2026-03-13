@@ -83,6 +83,12 @@ pub async fn apply_date_approval(conn: &Connection, media_item_id: i64, date: Op
         )?;
     } else {
         conn.execute(
+            "UPDATE media_items
+             SET date_needs_review=0, status='date_verified', updated_at=CURRENT_TIMESTAMP
+             WHERE id=?1",
+            [media_item_id],
+        )?;
+        conn.execute(
             "INSERT INTO audit_log(media_item_id, action, source, details)
              VALUES(?1, 'date_skipped', 'user', ?2)",
             params![media_item_id, "{\"approved\":false}"],
@@ -151,6 +157,77 @@ mod tests {
         assert_eq!(valid_status, "date_verified");
         assert_eq!(missing_status, "date_review_pending");
         assert_eq!(missing_flag, 1);
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn skip_clears_date_review_flag_and_sets_verified_status() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, date_needs_review)
+             VALUES(?1, ?2, ?3, 'date_review_pending', 1)",
+            params!["skip-1", "IMG_SKIP.JPG", "C:\\tmp\\IMG_SKIP.JPG"],
+        )
+        .expect("insert skip row");
+        let id = conn.last_insert_rowid();
+
+        super::apply_date_approval(&conn, id, None)
+            .await
+            .expect("skip approval");
+
+        let (flag, status): (i64, String) = conn
+            .query_row(
+                "SELECT date_needs_review, status FROM media_items WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("row after skip");
+        assert_eq!(flag, 0);
+        assert_eq!(status, "date_verified");
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn approve_sets_user_override_date_and_audit_row() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, date_needs_review)
+             VALUES(?1, ?2, ?3, 'date_review_pending', 1)",
+            params!["approve-1", "IMG_APPROVE.JPG", "C:\\tmp\\IMG_APPROVE.JPG"],
+        )
+        .expect("insert approve row");
+        let id = conn.last_insert_rowid();
+
+        super::apply_date_approval(&conn, id, Some("2026-04-20".to_string()))
+            .await
+            .expect("approve date");
+
+        let (date_taken, source, flag, status): (Option<String>, Option<String>, i64, String) = conn
+            .query_row(
+                "SELECT date_taken, date_taken_source, date_needs_review, status FROM media_items WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .expect("row after approve");
+        assert_eq!(date_taken.as_deref(), Some("2026-04-20"));
+        assert_eq!(source.as_deref(), Some("user_override"));
+        assert_eq!(flag, 0);
+        assert_eq!(status, "date_verified");
+
+        let audit_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE media_item_id=?1 AND action='date_set'",
+                [id],
+                |r| r.get(0),
+            )
+            .expect("date_set audit count");
+        assert_eq!(audit_count, 1);
 
         drop(conn);
         let _ = fs::remove_file(db_path);

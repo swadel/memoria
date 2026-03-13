@@ -91,11 +91,11 @@ export function getDateReviewQueue() {
 }
 
 export function getDateMediaThumbnail(mediaItemId: number) {
-  return invokeCommand<string | null>("get_date_media_thumbnail", { media_item_id: mediaItemId });
+  return invokeCommand<string | null>("get_date_media_thumbnail", { mediaItemId, media_item_id: mediaItemId });
 }
 
 export function applyDateApproval(mediaItemId: number, date: string | null) {
-  return invokeCommand<void>("apply_date_approval", { media_item_id: mediaItemId, date });
+  return invokeCommand<void>("apply_date_approval", { mediaItemId, media_item_id: mediaItemId, date });
 }
 
 export function runEventGrouping() {
@@ -107,7 +107,7 @@ export function getEventGroups() {
 }
 
 export function renameEventGroup(groupId: number, name: string) {
-  return invokeCommand<void>("rename_event_group", { group_id: groupId, name });
+  return invokeCommand<void>("rename_event_group", { groupId, group_id: groupId, name });
 }
 
 export function finalizeOrganization() {

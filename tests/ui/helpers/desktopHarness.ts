@@ -27,18 +27,19 @@ export class DesktopHarness {
 
   seedFixture(profile: string) {
     const appBinary = resolveAppBinary();
+    const cargo = resolveCargoBinary();
+    const buildResult = spawnSync(cargo, ["build", "--manifest-path", "src-tauri/Cargo.toml"], {
+      cwd: process.cwd(),
+      env: withCargoInPath({ ...process.env }),
+      shell: process.platform === "win32",
+      stdio: "pipe",
+      encoding: "utf-8"
+    });
+    if (buildResult.status !== 0) {
+      throw new Error(`Desktop binary build failed: ${buildResult.stderr || buildResult.stdout}`);
+    }
     if (!existsSync(appBinary)) {
-      const cargo = resolveCargoBinary();
-      const buildResult = spawnSync(cargo, ["build", "--manifest-path", "src-tauri/Cargo.toml"], {
-        cwd: process.cwd(),
-        env: withCargoInPath({ ...process.env }),
-        shell: process.platform === "win32",
-        stdio: "pipe",
-        encoding: "utf-8"
-      });
-      if (buildResult.status !== 0) {
-        throw new Error(`Desktop binary build failed: ${buildResult.stderr || buildResult.stdout}`);
-      }
+      throw new Error(`Desktop binary not found after build: ${appBinary}`);
     }
     const result = spawnSync(
       appBinary,
