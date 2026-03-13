@@ -24,7 +24,7 @@ test.describe("Memoria browser UI smoke", () => {
     await expect(page.getByTestId("pipeline-progress-track")).toHaveCount(0);
   });
 
-  test("handles date approval and event renaming", async ({ page }) => {
+  test("handles date approval", async ({ page }) => {
     await page.getByTestId("tab-dates").click();
     const dateItems = page.locator("[data-testid^='date-item-']");
     await expect(dateItems).toHaveCount(2);
@@ -38,11 +38,67 @@ test.describe("Memoria browser UI smoke", () => {
     await page.getByTestId("date-skip-302").click();
     await expect(dateItems).toHaveCount(0);
     await expect(page.getByTestId("status-pill")).toContainText("Skipped date approval");
+  });
 
+  test("event groups enforce uniqueness and support detail move flows", async ({ page }) => {
     await page.getByTestId("tab-events").click();
-    await page.getByTestId("event-rename-input-401").fill("Playwright Renamed Event");
-    await page.getByTestId("event-rename-save-401").click();
-    await expect(page.getByTestId("event-group-401")).toContainText("2026 - Playwright Renamed Event");
+
+    await page.getByTestId("event-add-group-button").click();
+    await page.getByTestId("event-add-group-input").fill("Ski Trip");
+    await expect(page.getByTestId("event-add-group-error")).toContainText("already exists");
+    await expect(page.getByTestId("event-add-group-save")).toBeDisabled();
+
+    await page.getByTestId("event-add-group-input").fill("Road Trip");
+    await page.getByTestId("event-add-group-save").click();
+    await expect(page.getByTestId("event-group-402")).toContainText("0 items");
+    await expect(page.getByTestId("event-delete-402")).toBeVisible();
+
+    await page.getByTestId("event-rename-input-402").fill("SKI TRIP");
+    await expect(page.getByTestId("event-rename-error-402")).toContainText("already exists");
+    await expect(page.getByTestId("event-rename-save-402")).toBeDisabled();
+
+    await page.getByTestId("event-open-401").click();
+    await expect(page.getByTestId("event-group-detail-view")).toBeVisible();
+    await expect(page.getByTestId("event-virtual-grid")).toBeVisible();
+    await expect(page.getByTestId("event-media-item-901")).toBeVisible();
+    await expect(page.getByTestId("event-media-item-902")).toBeVisible();
+
+    await page.getByTestId("event-media-preview-901").click();
+    await expect(page.getByTestId("event-preview-image")).toBeVisible();
+    await page.getByTestId("event-preview-close").click();
+
+    await page.getByTestId("event-media-select-901").click();
+    await page.getByTestId("event-media-select-902").click({ modifiers: ["Shift"] });
+    await expect(page.getByTestId("event-selection-toolbar")).toContainText("2 selected");
+
+    await page.getByTestId("event-move-selected").click();
+    await page.getByTestId("event-move-target-select").selectOption("402");
+    await page.getByTestId("event-move-confirm").click();
+    await expect(page.getByTestId("event-selection-toolbar")).toHaveCount(0);
+    await expect(page.getByTestId("event-media-item-901")).toHaveCount(0);
+
+    await page.getByTestId("event-detail-back").click();
+    await expect(page.getByTestId("event-group-401")).toContainText("0 items");
+    await expect(page.getByTestId("event-delete-401")).toBeVisible();
+    await expect(page.getByTestId("event-group-402")).toContainText("2 items");
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("event-delete-401").click();
+    await expect(page.getByTestId("event-group-401")).toHaveCount(0);
+
+    await page.getByTestId("event-open-402").click();
+    await page.getByTestId("event-select-all").click();
+    await expect(page.getByTestId("event-selection-toolbar")).toContainText("2 selected");
+    await page.getByTestId("event-move-selected").click();
+    await page.getByLabel("Create New Group").click();
+    await page.getByTestId("event-move-new-group-input").fill("road trip");
+    await page.getByTestId("event-move-confirm").click();
+    await expect(page.getByTestId("event-move-error")).toContainText("already exists");
+    await page.getByTestId("event-move-new-group-input").fill("Family Reunion");
+    await page.getByTestId("event-move-confirm").click();
+    await expect(page.getByTestId("event-detail-back")).toBeVisible();
+    await page.getByTestId("event-detail-back").click();
+    await expect(page.getByTestId("event-group-403")).toContainText("2 items");
   });
 
   test("saves settings sections without crashing", async ({ page }) => {

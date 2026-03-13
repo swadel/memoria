@@ -205,6 +205,102 @@ button:hover {
   background: rgba(255, 255, 255, 0.9);
 }
 
+.eventGroupCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.eventGroupOpenButton {
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.eventSelectionToolbar {
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.eventVirtualGridViewport {
+  height: 600px;
+  overflow: auto;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  padding: 8px;
+}
+
+.eventVirtualRow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 4px 2px;
+}
+
+.eventThumbCard {
+  position: relative;
+  border: 2px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  padding: 8px;
+  background: #ffffff;
+}
+
+.eventThumbCard.selected {
+  border-color: #0071e3;
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.18);
+}
+
+.eventThumbSelectButton {
+  margin-bottom: 6px;
+}
+
+.eventThumbPreviewButton {
+  border: none;
+  padding: 0;
+  width: 100%;
+  background: transparent;
+}
+
+.eventThumbImage {
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.eventThumbMeta {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.eventThumbCheckmark {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #0071e3;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.eventPreviewAsset {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
 .dateThumb {
   width: 100%;
   height: 160px;

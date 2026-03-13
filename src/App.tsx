@@ -1,14 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   applyDateApproval,
+  createEventGroup,
+  createEventGroupAndMove,
+  deleteEventGroup,
   finalizeOrganization,
   getAppConfiguration,
   getDashboardStats,
   getDateMediaThumbnail,
   getDateReviewQueue,
+  getEventGroupItems,
+  getEventGroupMediaPreview,
   getEventGroups,
   getToolHealth,
   initializeApp,
+  moveEventGroupItems,
   renameEventGroup,
   runEventGrouping,
   setAiTaskModel,
@@ -20,7 +27,7 @@ import {
   resetSession,
   type ToolHealth
 } from "./lib/api";
-import type { DashboardStats, DateEstimate, EventGroup } from "./types";
+import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem } from "./types";
 
 type Tab = "dashboard" | "dates" | "events" | "settings";
 type PipelineStage = "index" | "date" | "group" | "finalize";
@@ -72,6 +79,20 @@ export function App() {
   });
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
+  const [showAddGroupForm, setShowAddGroupForm] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupError, setNewGroupError] = useState("");
+  const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
+  const [activeGroupItems, setActiveGroupItems] = useState<EventGroupItem[]>([]);
+  const [selectedItemIds, setSelectedItemIds] = useState<number[]>([]);
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [eventMoveMode, setEventMoveMode] = useState<"existing" | "new">("existing");
+  const [eventMoveTargetGroupId, setEventMoveTargetGroupId] = useState<number | null>(null);
+  const [eventMoveNewGroupName, setEventMoveNewGroupName] = useState("");
+  const [eventMoveError, setEventMoveError] = useState("");
+  const [showMoveDialog, setShowMoveDialog] = useState(false);
+  const [previewItem, setPreviewItem] = useState<EventGroupItem | null>(null);
+  const [previewSrc, setPreviewSrc] = useState<string>("");
   const [toolHealth, setToolHealth] = useState<ToolHealth | null>(null);
   const [pipelineStages, setPipelineStages] = useState<Record<PipelineStage, PipelineStageState>>(
     derivePipelineStages(DEFAULT_STATS)
@@ -196,6 +217,127 @@ export function App() {
     [stats.dateNeedsReview]
   );
 
+  const normalizedGroupNames = useMemo(() => new Set(groups.map((group) => normalizeName(group.name))), [groups]);
+  const activeGroup = useMemo(
+    () => (activeGroupId === null ? null : groups.find((group) => group.id === activeGroupId) ?? null),
+    [activeGroupId, groups]
+  );
+
+  useEffect(() => {
+    if (!activeGroupId) {
+      return;
+    }
+    getEventGroupItems(activeGroupId)
+      .then((items) => {
+        setActiveGroupItems(items);
+        setSelectedItemIds([]);
+        setLastSelectedIndex(null);
+      })
+      .catch((err) => {
+        setMessage(`Loading group detail failed: ${String(err)}`);
+      });
+  }, [activeGroupId]);
+
+  useEffect(() => {
+    if (!previewItem) {
+      setPreviewSrc("");
+      return;
+    }
+    getEventGroupMediaPreview(previewItem.id)
+      .then((src) => setPreviewSrc(src ?? ""))
+      .catch((err) => setMessage(`Preview failed: ${String(err)}`));
+  }, [previewItem]);
+
+  async function onCreateGroup() {
+    const normalized = normalizeName(newGroupName);
+    if (!normalized) {
+      setNewGroupError("Group name is required");
+      return;
+    }
+    if (normalizedGroupNames.has(normalized)) {
+      setNewGroupError("A group with this name already exists");
+      return;
+    }
+    setBusyAction("create-group");
+    setNewGroupError("");
+    try {
+      await createEventGroup(newGroupName.trim());
+      await refreshAll();
+      setShowAddGroupForm(false);
+      setNewGroupName("");
+      setMessage("Event group created.");
+    } catch (err) {
+      setNewGroupError(String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function onDeleteGroup(group: EventGroup) {
+    const confirmed = window.confirm(`Delete ${group.name}? This cannot be undone.`);
+    if (!confirmed) {
+      return;
+    }
+    setBusyAction(`delete-group-${group.id}`);
+    try {
+      await deleteEventGroup(group.id);
+      await refreshAll();
+      setMessage(`Deleted group ${group.name}.`);
+    } catch (err) {
+      setMessage(`Delete failed: ${String(err)}`);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function openMoveDialog() {
+    const defaultTarget = groups.find((group) => group.id !== activeGroupId)?.id ?? null;
+    setEventMoveTargetGroupId(defaultTarget);
+    setEventMoveMode("existing");
+    setEventMoveError("");
+    setEventMoveNewGroupName("");
+    setShowMoveDialog(true);
+  }
+
+  async function onMoveSelectedItems() {
+    if (!activeGroupId || selectedItemIds.length === 0) {
+      return;
+    }
+    setBusyAction("move-group-items");
+    setEventMoveError("");
+    try {
+      if (eventMoveMode === "existing") {
+        if (!eventMoveTargetGroupId) {
+          setEventMoveError("Choose a destination group");
+          return;
+        }
+        await moveEventGroupItems(selectedItemIds, eventMoveTargetGroupId);
+      } else {
+        const normalized = normalizeName(eventMoveNewGroupName);
+        if (!normalized) {
+          setEventMoveError("Group name is required");
+          return;
+        }
+        if (normalizedGroupNames.has(normalized)) {
+          setEventMoveError("A group with this name already exists");
+          return;
+        }
+        await createEventGroupAndMove(eventMoveNewGroupName.trim(), selectedItemIds);
+      }
+      const [nextGroups, nextItems] = await Promise.all([getEventGroups(), getEventGroupItems(activeGroupId)]);
+      setGroups(nextGroups);
+      setActiveGroupItems(nextItems);
+      setSelectedItemIds([]);
+      setLastSelectedIndex(null);
+      setShowMoveDialog(false);
+      setMessage("Moved selected items.");
+    } catch (err) {
+      setEventMoveError(String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   return (
     <div className="layout" data-testid="layout-root">
       <div className="topbar">
@@ -314,19 +456,86 @@ export function App() {
 
       {tab === "events" && (
         <div className="card" data-testid="event-groups-card">
-          <h3>Event Group Review</h3>
-          <div className="grid">
-            {groups.map((group) => (
-              <EventCard
-                key={group.id}
-                group={group}
-                onRename={async (name) => {
-                  await renameEventGroup(group.id, name);
-                  await refreshAll();
-                }}
-              />
-            ))}
-          </div>
+          {activeGroup ? (
+            <EventGroupDetailView
+              group={activeGroup}
+              groups={groups}
+              items={activeGroupItems}
+              selectedItemIds={selectedItemIds}
+              setSelectedItemIds={setSelectedItemIds}
+              lastSelectedIndex={lastSelectedIndex}
+              setLastSelectedIndex={setLastSelectedIndex}
+              onBack={() => setActiveGroupId(null)}
+              onOpenPreview={(item) => setPreviewItem(item)}
+              onMoveSelected={openMoveDialog}
+            />
+          ) : (
+            <>
+              <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+                <h3 style={{ margin: 0 }}>Event Group Review</h3>
+                <button
+                  data-testid="event-add-group-button"
+                  className="primaryBtn"
+                  disabled={busyAction !== null}
+                  onClick={() => setShowAddGroupForm((prev) => !prev)}
+                >
+                  Add Group
+                </button>
+              </div>
+              {showAddGroupForm && (
+                <div className="item" data-testid="event-add-group-form">
+                  <div className="row">
+                    <label className="fieldLabel" htmlFor="event-add-group-name">New Group Name</label>
+                    <input
+                      id="event-add-group-name"
+                      data-testid="event-add-group-input"
+                      value={newGroupName}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setNewGroupName(next);
+                        const normalized = normalizeName(next);
+                        if (!normalized) {
+                          setNewGroupError("Group name is required");
+                        } else if (normalizedGroupNames.has(normalized)) {
+                          setNewGroupError("A group with this name already exists");
+                        } else {
+                          setNewGroupError("");
+                        }
+                      }}
+                    />
+                    <button
+                      data-testid="event-add-group-save"
+                      disabled={busyAction !== null || newGroupError.length > 0 || normalizeName(newGroupName).length === 0}
+                      onClick={() => {
+                        void onCreateGroup();
+                      }}
+                    >
+                      Save
+                    </button>
+                  </div>
+                  {newGroupError ? (
+                    <div className="danger" data-testid="event-add-group-error">{newGroupError}</div>
+                  ) : null}
+                </div>
+              )}
+              <div className="grid">
+                {groups.map((group) => (
+                  <EventCard
+                    key={group.id}
+                    group={group}
+                    allGroupNames={groups.map((entry) => entry.name)}
+                    onOpen={() => setActiveGroupId(group.id)}
+                    onRename={async (name) => {
+                      await renameEventGroup(group.id, name);
+                      await refreshAll();
+                    }}
+                    onDelete={group.itemCount === 0 ? async () => onDeleteGroup(group) : undefined}
+                    busy={busyAction !== null}
+                  />
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -503,6 +712,103 @@ export function App() {
         </div>
       )}
 
+      {showMoveDialog && (
+        <div className="lightboxOverlay" data-testid="event-move-overlay" onClick={() => setShowMoveDialog(false)}>
+          <div
+            className="lightboxCard"
+            role="dialog"
+            aria-label="Move selected items"
+            data-testid="event-move-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>Move to Group</h3>
+            <div className="row">
+              <label>
+                <input
+                  type="radio"
+                  name="move-target"
+                  checked={eventMoveMode === "existing"}
+                  onChange={() => setEventMoveMode("existing")}
+                />
+                Existing Group
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="move-target"
+                  checked={eventMoveMode === "new"}
+                  onChange={() => setEventMoveMode("new")}
+                />
+                Create New Group
+              </label>
+            </div>
+            {eventMoveMode === "existing" ? (
+              <select
+                data-testid="event-move-target-select"
+                value={eventMoveTargetGroupId ?? ""}
+                onChange={(e) => setEventMoveTargetGroupId(Number(e.target.value))}
+              >
+                <option value="" disabled>Select destination</option>
+                {groups
+                  .filter((group) => group.id !== activeGroupId)
+                  .map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.folderName} ({group.itemCount})
+                    </option>
+                  ))}
+              </select>
+            ) : (
+              <input
+                data-testid="event-move-new-group-input"
+                placeholder="New group name"
+                value={eventMoveNewGroupName}
+                onChange={(e) => setEventMoveNewGroupName(e.target.value)}
+              />
+            )}
+            {eventMoveError ? (
+              <div className="danger" data-testid="event-move-error">{eventMoveError}</div>
+            ) : null}
+            <div className="row">
+              <button
+                data-testid="event-move-confirm"
+                className="primaryBtn"
+                disabled={busyAction !== null}
+                onClick={() => {
+                  void onMoveSelectedItems();
+                }}
+              >
+                {busyAction === "move-group-items" ? "Moving..." : "Move"}
+              </button>
+              <button data-testid="event-move-cancel" className="secondaryBtn" onClick={() => setShowMoveDialog(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {previewItem && (
+        <div className="lightboxOverlay" data-testid="event-preview-overlay" onClick={() => setPreviewItem(null)}>
+          <div className="lightboxCard" onClick={(e) => e.stopPropagation()}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <strong>{previewItem.filename}</strong>
+              <button className="secondaryBtn" data-testid="event-preview-close" onClick={() => setPreviewItem(null)}>
+                Close
+              </button>
+            </div>
+            {previewSrc ? (
+              previewItem.mimeType.startsWith("video/") ? (
+                <video data-testid="event-preview-video" controls className="eventPreviewAsset" src={previewSrc} />
+              ) : (
+                <img data-testid="event-preview-image" className="eventPreviewAsset" src={previewSrc} alt={previewItem.filename} />
+              )
+            ) : (
+              <div className="muted">Loading preview...</div>
+            )}
+          </div>
+        </div>
+      )}
+
       {showResetPrompt && (
         <div className="lightboxOverlay" data-testid="reset-session-overlay" onClick={() => setShowResetPrompt(false)}>
           <div className="lightboxCard" role="dialog" aria-label="Reset session confirmation" data-testid="reset-session-dialog" onClick={(e) => e.stopPropagation()}>
@@ -638,20 +944,276 @@ function escapeSvgText(value: string): string {
   return value.replace(/[<>&'"]/g, "_");
 }
 
-function EventCard({ group, onRename }: { group: EventGroup; onRename: (name: string) => Promise<void> }) {
+function EventCard({
+  group,
+  allGroupNames,
+  onOpen,
+  onRename,
+  onDelete,
+  busy
+}: {
+  group: EventGroup;
+  allGroupNames: string[];
+  onOpen: () => void;
+  onRename: (name: string) => Promise<void>;
+  onDelete?: () => Promise<void>;
+  busy: boolean;
+}) {
   const [value, setValue] = useState(group.name);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setValue(group.name);
+  }, [group.name]);
+  const normalizedCurrent = normalizeName(value);
+  const duplicate = allGroupNames.some(
+    (name) => normalizeName(name) === normalizedCurrent && normalizeName(name) !== normalizeName(group.name)
+  );
   return (
-    <div className="item" data-testid={`event-group-${group.id}`}>
-      <strong>{group.folderName}</strong>
+    <div className="item eventGroupCard" data-testid={`event-group-${group.id}`}>
+      <button
+        className="eventGroupOpenButton"
+        data-testid={`event-open-${group.id}`}
+        onClick={onOpen}
+      >
+        <strong>{group.folderName}</strong>
+      </button>
       <div className="muted">{group.itemCount} items</div>
       <div className="row">
-        <input data-testid={`event-rename-input-${group.id}`} value={value} onChange={(e) => setValue(e.target.value)} />
-        <button data-testid={`event-rename-save-${group.id}`} onClick={() => onRename(value)}>
-          Rename
+        <input
+          data-testid={`event-rename-input-${group.id}`}
+          value={value}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setError("");
+          }}
+        />
+        <button
+          data-testid={`event-rename-save-${group.id}`}
+          disabled={busy || saving || duplicate || normalizeName(value).length === 0}
+          onClick={async () => {
+            setSaving(true);
+            setError("");
+            try {
+              await onRename(value.trim());
+            } catch (err) {
+              setError(String(err));
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? "Saving..." : "Rename"}
         </button>
+      </div>
+      {duplicate ? (
+        <div className="danger" data-testid={`event-rename-error-${group.id}`}>A group with this name already exists</div>
+      ) : null}
+      {error ? <div className="danger">{error}</div> : null}
+      {onDelete ? (
+        <div className="row">
+          <button
+            data-testid={`event-delete-${group.id}`}
+            className="secondaryBtn"
+            disabled={busy}
+            onClick={() => {
+              void onDelete();
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EventGroupDetailView({
+  group,
+  groups,
+  items,
+  selectedItemIds,
+  setSelectedItemIds,
+  lastSelectedIndex,
+  setLastSelectedIndex,
+  onBack,
+  onOpenPreview,
+  onMoveSelected
+}: {
+  group: EventGroup;
+  groups: EventGroup[];
+  items: EventGroupItem[];
+  selectedItemIds: number[];
+  setSelectedItemIds: (next: number[] | ((prev: number[]) => number[])) => void;
+  lastSelectedIndex: number | null;
+  setLastSelectedIndex: (next: number | null) => void;
+  onBack: () => void;
+  onOpenPreview: (item: EventGroupItem) => void;
+  onMoveSelected: () => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const columns = 4;
+  const rowHeight = 260;
+  const rows = Math.ceil(items.length / columns);
+  const rowVirtualizer = useVirtualizer({
+    count: rows,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => rowHeight,
+    overscan: 5
+  });
+  const selected = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
+  const selectableGroups = groups.filter((entry) => entry.id !== group.id);
+
+  function toggleSelection(index: number, shiftKey: boolean) {
+    const item = items[index];
+    if (!item) return;
+    if (shiftKey && lastSelectedIndex !== null) {
+      const start = Math.min(lastSelectedIndex, index);
+      const end = Math.max(lastSelectedIndex, index);
+      const rangeIds = items.slice(start, end + 1).map((entry) => entry.id);
+      setSelectedItemIds((prev) => {
+        const next = new Set(prev);
+        for (const id of rangeIds) {
+          next.add(id);
+        }
+        return Array.from(next);
+      });
+    } else {
+      setSelectedItemIds((prev) =>
+        prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]
+      );
+      setLastSelectedIndex(index);
+    }
+  }
+
+  return (
+    <div data-testid="event-group-detail-view">
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+        <div>
+          <button data-testid="event-detail-back" className="secondaryBtn" onClick={onBack}>
+            Back to Event Group Review
+          </button>
+          <h3 style={{ margin: "8px 0 0" }}>{group.folderName}</h3>
+        </div>
+        <div className="row">
+          <button
+            data-testid="event-select-all"
+            className="secondaryBtn"
+            onClick={() => setSelectedItemIds(items.map((item) => item.id))}
+          >
+            Select All
+          </button>
+          <button
+            data-testid="event-deselect-all"
+            className="secondaryBtn"
+            onClick={() => setSelectedItemIds([])}
+          >
+            Deselect All
+          </button>
+        </div>
+      </div>
+      {selectedItemIds.length > 0 && (
+        <div className="item eventSelectionToolbar" data-testid="event-selection-toolbar">
+          <strong>{selectedItemIds.length} selected</strong>
+          <button
+            data-testid="event-move-selected"
+            className="primaryBtn"
+            onClick={onMoveSelected}
+          >
+            Move to Group
+          </button>
+        </div>
+      )}
+      <div className="eventVirtualGridViewport" ref={scrollRef} data-testid="event-virtual-grid">
+        <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const startIndex = virtualRow.index * columns;
+            const rowItems = items.slice(startIndex, startIndex + columns);
+            return (
+              <div
+                key={virtualRow.key}
+                className="eventVirtualRow"
+                style={{ transform: `translateY(${virtualRow.start}px)` }}
+              >
+                {rowItems.map((item, offset) => {
+                  const index = startIndex + offset;
+                  const isSelected = selected.has(item.id);
+                  return (
+                    <EventThumbCard
+                      key={item.id}
+                      item={item}
+                      selected={isSelected}
+                      onToggle={(shiftKey) => toggleSelection(index, shiftKey)}
+                      onOpenPreview={() => onOpenPreview(item)}
+                    />
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
+}
+
+function EventThumbCard({
+  item,
+  selected,
+  onToggle,
+  onOpenPreview
+}: {
+  item: EventGroupItem;
+  selected: boolean;
+  onToggle: (shiftKey: boolean) => void;
+  onOpenPreview: () => void;
+}) {
+  const [thumbSrc, setThumbSrc] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    getDateMediaThumbnail(item.id)
+      .then((src) => {
+        if (!cancelled && src) {
+          setThumbSrc(src);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setThumbSrc(getDateThumbFallbackDataUrl(item.filename));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [item.id, item.filename]);
+
+  return (
+    <div className={selected ? "eventThumbCard selected" : "eventThumbCard"} data-testid={`event-media-item-${item.id}`}>
+      <button
+        className="eventThumbSelectButton"
+        data-testid={`event-media-select-${item.id}`}
+        onClick={(event) => onToggle(event.shiftKey)}
+      >
+        {selected ? "Selected" : "Select"}
+      </button>
+      <button
+        className="eventThumbPreviewButton"
+        data-testid={`event-media-preview-${item.id}`}
+        onClick={onOpenPreview}
+      >
+        <img className="eventThumbImage" src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)} alt={item.filename} />
+      </button>
+      <div className="eventThumbMeta">
+        <strong>{item.filename}</strong>
+        <div className="muted">{item.dateTaken ?? "(missing date)"}</div>
+      </div>
+      {selected ? <div className="eventThumbCheckmark">✓</div> : null}
+    </div>
+  );
+}
+
+function normalizeName(value: string): string {
+  return value.trim().toLocaleLowerCase();
 }
 
 function ModelSelector({

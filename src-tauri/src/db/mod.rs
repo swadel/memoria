@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
 
-use crate::models::{DashboardStats, DateEstimateDto, EventGroupDto};
+use crate::models::{DashboardStats, DateEstimateDto, EventGroupDto, EventGroupItemDto};
 
 pub fn init_db(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -195,6 +195,72 @@ pub fn get_event_groups(conn: &Connection) -> Result<Vec<EventGroupDto>> {
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn get_event_group_items(conn: &Connection, group_id: i64) -> Result<Vec<EventGroupItemDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, filename, current_path, date_taken, COALESCE(mime_type, '')
+         FROM media_items
+         WHERE event_group_id=?1
+         ORDER BY date_taken ASC, id ASC",
+    )?;
+    let rows = stmt.query_map([group_id], |row| {
+        Ok(EventGroupItemDto {
+            id: row.get(0)?,
+            filename: row.get(1)?,
+            current_path: row.get(2)?,
+            date_taken: row.get(3)?,
+            mime_type: row.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn event_group_name_exists(conn: &Connection, name: &str, exclude_id: Option<i64>) -> Result<bool> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+    let exists = if let Some(id) = exclude_id {
+        conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM event_groups
+                WHERE lower(trim(name))=lower(trim(?1))
+                  AND id <> ?2
+            )",
+            rusqlite::params![trimmed, id],
+            |r| r.get::<_, i64>(0),
+        )?
+    } else {
+        conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM event_groups
+                WHERE lower(trim(name))=lower(trim(?1))
+            )",
+            [trimmed],
+            |r| r.get::<_, i64>(0),
+        )?
+    };
+    Ok(exists == 1)
+}
+
+pub fn refresh_event_group_item_counts(conn: &Connection, ids: &[i64]) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut update_stmt = conn.prepare(
+        "UPDATE event_groups
+         SET item_count=(
+             SELECT COUNT(*) FROM media_items WHERE event_group_id=event_groups.id
+         )
+         WHERE id=?1",
+    )?;
+    for id in ids {
+        update_stmt.execute([id])?;
+    }
+    Ok(())
 }
 
 pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {

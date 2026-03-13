@@ -58,6 +58,16 @@ Memoria clusters your photos into events automatically:
 
 Photos not associated with any event go into a `[YEAR] - Misc` folder.
 
+### Event Group Review and Reassignment
+- Event Group cards are clickable and open a dedicated detail view for that group
+- Group detail uses a virtualized thumbnail grid (via `@tanstack/virtual`) to stay responsive with large groups
+- Each item shows a thumbnail, filename, and date taken; clicking the thumbnail opens a full-size image/video preview
+- Multi-select supports click, shift+click range selection, **Select All**, and **Deselect All**
+- Selected items can be moved to another existing group or to a newly created group in one action
+- Group names are enforced as case-insensitive unique values (for rename and create), with inline validation errors
+- Empty groups are intentionally preserved after moves and can then be deleted explicitly from Event Group Review
+- New empty groups can be added manually with **Add Group** and are shown immediately with `0 items`
+
 ### Non-Destructive by Design
 Memoria never hard-deletes media in the normal pipeline:
 - Indexing writes staged copies under `/staging/`
@@ -127,6 +137,7 @@ npm run tauri dev
 3. **Group**
    - Groups `date_verified` items into event clusters
    - Creates event groups and links items with `status='grouped'`
+   - Supports click-through detail review, multiselect item moves, manual group creation, and delete of empty groups only
 
 4. **Finalize**
    - Copies grouped items into `/organized/<year>/<year - event>/`

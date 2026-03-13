@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DashboardStats, DateEstimate, EventGroup } from "../types";
+import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem } from "../types";
 
 declare global {
   interface Window {
@@ -108,6 +108,42 @@ export function getEventGroups() {
 
 export function renameEventGroup(groupId: number, name: string) {
   return invokeCommand<void>("rename_event_group", { groupId, group_id: groupId, name });
+}
+
+export function createEventGroup(name: string) {
+  return invokeCommand<EventGroup>("create_event_group", { name });
+}
+
+export function deleteEventGroup(groupId: number) {
+  return invokeCommand<void>("delete_event_group", { groupId, group_id: groupId });
+}
+
+export function getEventGroupItems(groupId: number) {
+  return invokeCommand<EventGroupItem[]>("get_event_group_items", { groupId, group_id: groupId });
+}
+
+export function getEventGroupMediaPreview(mediaItemId: number) {
+  return invokeCommand<string | null>("get_event_group_media_preview", {
+    mediaItemId,
+    media_item_id: mediaItemId
+  });
+}
+
+export function moveEventGroupItems(mediaItemIds: number[], destinationGroupId: number) {
+  return invokeCommand<void>("move_event_group_items", {
+    mediaItemIds,
+    media_item_ids: mediaItemIds,
+    destinationGroupId,
+    destination_group_id: destinationGroupId
+  });
+}
+
+export function createEventGroupAndMove(name: string, mediaItemIds: number[]) {
+  return invokeCommand<EventGroup>("create_event_group_and_move", {
+    name,
+    mediaItemIds,
+    media_item_ids: mediaItemIds
+  });
 }
 
 export function finalizeOrganization() {

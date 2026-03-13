@@ -20,6 +20,14 @@ type EventGroup = {
   userApproved: boolean;
 };
 
+type EventGroupItem = {
+  id: number;
+  filename: string;
+  currentPath: string;
+  dateTaken: string | null;
+  mimeType: string;
+};
+
 function buildState(profile: BrowserFixtureProfile) {
   const dateItems: DateEstimate[] =
     profile === "settings-only"
@@ -57,6 +65,28 @@ function buildState(profile: BrowserFixtureProfile) {
           }
         ];
 
+  const eventGroupItemsByGroupId: Record<number, EventGroupItem[]> =
+    profile === "settings-only"
+      ? {}
+      : {
+          401: [
+            {
+              id: 901,
+              filename: "ski_001.png",
+              currentPath: "C:\\fixture\\output\\staging\\ski_001.png",
+              dateTaken: "2026-01-11",
+              mimeType: "image/png"
+            },
+            {
+              id: 902,
+              filename: "ski_002.png",
+              currentPath: "C:\\fixture\\output\\staging\\ski_002.png",
+              dateTaken: "2026-01-12",
+              mimeType: "image/png"
+            }
+          ]
+        };
+
   const stats = {
     total: 8,
     downloading: 0,
@@ -79,7 +109,9 @@ function buildState(profile: BrowserFixtureProfile) {
     },
     stats,
     dateItems,
-    eventGroups
+    eventGroups,
+    eventGroupItemsByGroupId,
+    nextGroupId: 402
   };
 }
 
@@ -123,6 +155,12 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               return Promise.resolve(tinyPngDataUrl);
             case "get_event_groups":
               return Promise.resolve(state.eventGroups);
+            case "get_event_group_items": {
+              const groupId = Number(args?.groupId ?? args?.group_id ?? -1);
+              return Promise.resolve(state.eventGroupItemsByGroupId[groupId] ?? []);
+            }
+            case "get_event_group_media_preview":
+              return Promise.resolve(tinyPngDataUrl);
             case "set_working_directory":
               state.config.workingDirectory = String(args?.path ?? state.config.workingDirectory);
               return Promise.resolve();
@@ -164,10 +202,107 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "rename_event_group": {
               const id = Number(args?.groupId ?? args?.group_id ?? -1);
               const name = String(args?.name ?? "");
+              const exists = state.eventGroups.some(
+                (group: EventGroup) => group.id !== id && group.name.trim().toLowerCase() === name.trim().toLowerCase()
+              );
+              if (exists) {
+                return Promise.reject(new Error("A group with this name already exists"));
+              }
               state.eventGroups = state.eventGroups.map((group: EventGroup) =>
                 group.id === id ? { ...group, name, folderName: `${group.year} - ${name}` } : group
               );
               return Promise.resolve();
+            }
+            case "create_event_group": {
+              const name = String(args?.name ?? "").trim();
+              const exists = state.eventGroups.some(
+                (group: EventGroup) => group.name.trim().toLowerCase() === name.toLowerCase()
+              );
+              if (exists) {
+                return Promise.reject(new Error("A group with this name already exists"));
+              }
+              const group: EventGroup = {
+                id: state.nextGroupId++,
+                year: 2026,
+                name,
+                folderName: `2026 - ${name}`,
+                itemCount: 0,
+                userApproved: true
+              };
+              state.eventGroups = [...state.eventGroups, group];
+              state.eventGroupItemsByGroupId[group.id] = [];
+              return Promise.resolve(group);
+            }
+            case "delete_event_group": {
+              const groupId = Number(args?.groupId ?? args?.group_id ?? -1);
+              const items = state.eventGroupItemsByGroupId[groupId] ?? [];
+              if (items.length > 0) {
+                return Promise.reject(new Error("Cannot delete a group that still has items"));
+              }
+              state.eventGroups = state.eventGroups.filter((group: EventGroup) => group.id !== groupId);
+              delete state.eventGroupItemsByGroupId[groupId];
+              return Promise.resolve();
+            }
+            case "move_event_group_items": {
+              const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
+              const destinationGroupId = Number(args?.destinationGroupId ?? args?.destination_group_id ?? -1);
+              const destinationItems = state.eventGroupItemsByGroupId[destinationGroupId] ?? [];
+              const moving: EventGroupItem[] = [];
+              for (const group of state.eventGroups as EventGroup[]) {
+                const currentItems = state.eventGroupItemsByGroupId[group.id] ?? [];
+                const retained = currentItems.filter((item: EventGroupItem) => {
+                  if (ids.includes(item.id)) {
+                    moving.push(item);
+                    return false;
+                  }
+                  return true;
+                });
+                state.eventGroupItemsByGroupId[group.id] = retained;
+                group.itemCount = retained.length;
+              }
+              state.eventGroupItemsByGroupId[destinationGroupId] = [...destinationItems, ...moving];
+              state.eventGroups = state.eventGroups.map((group: EventGroup) =>
+                group.id === destinationGroupId
+                  ? { ...group, itemCount: state.eventGroupItemsByGroupId[destinationGroupId].length }
+                  : group
+              );
+              return Promise.resolve();
+            }
+            case "create_event_group_and_move": {
+              const name = String(args?.name ?? "").trim();
+              const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
+              const exists = state.eventGroups.some(
+                (group: EventGroup) => group.name.trim().toLowerCase() === name.toLowerCase()
+              );
+              if (exists) {
+                return Promise.reject(new Error("A group with this name already exists"));
+              }
+              const group: EventGroup = {
+                id: state.nextGroupId++,
+                year: 2026,
+                name,
+                folderName: `2026 - ${name}`,
+                itemCount: 0,
+                userApproved: true
+              };
+              state.eventGroups = [...state.eventGroups, group];
+              state.eventGroupItemsByGroupId[group.id] = [];
+              const destinationItems = state.eventGroupItemsByGroupId[group.id];
+              for (const source of state.eventGroups as EventGroup[]) {
+                if (source.id === group.id) continue;
+                const currentItems = state.eventGroupItemsByGroupId[source.id] ?? [];
+                const retained = currentItems.filter((item: EventGroupItem) => {
+                  if (ids.includes(item.id)) {
+                    destinationItems.push(item);
+                    return false;
+                  }
+                  return true;
+                });
+                state.eventGroupItemsByGroupId[source.id] = retained;
+                source.itemCount = retained.length;
+              }
+              group.itemCount = destinationItems.length;
+              return Promise.resolve(group);
             }
             default:
               return Promise.reject(new Error(`Unknown mocked command: ${command}`));

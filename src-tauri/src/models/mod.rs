@@ -37,6 +37,16 @@ pub struct EventGroupDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EventGroupItemDto {
+    pub id: i64,
+    pub filename: String,
+    pub current_path: String,
+    pub date_taken: Option<String>,
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionInput {
     pub working_directory: String,
     pub output_directory: String,

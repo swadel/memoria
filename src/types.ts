@@ -29,6 +29,14 @@ export interface EventGroup {
   userApproved: boolean;
 }
 
+export interface EventGroupItem {
+  id: number;
+  filename: string;
+  currentPath: string;
+  dateTaken: string | null;
+  mimeType: string;
+}
+
 export interface DateEstimate {
   mediaItemId: number;
   filename: string;

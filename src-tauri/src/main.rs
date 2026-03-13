@@ -138,7 +138,13 @@ pub fn run() {
             commands::metadata::apply_date_approval,
             commands::organize::run_event_grouping,
             commands::organize::get_event_groups,
+            commands::organize::get_event_group_items,
+            commands::organize::get_event_group_media_preview,
             commands::organize::rename_event_group,
+            commands::organize::create_event_group,
+            commands::organize::delete_event_group,
+            commands::organize::move_event_group_items,
+            commands::organize::create_event_group_and_move,
             commands::organize::finalize_organization,
             commands::testing::seed_test_fixture
         ])

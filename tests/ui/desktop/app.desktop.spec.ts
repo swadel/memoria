@@ -30,6 +30,34 @@ test.describe("Memoria desktop UI", () => {
     await expect(page.getByTestId("event-groups-card")).toContainText("Ski Trip");
   });
 
+  test("event groups support add/delete and detail navigation", async () => {
+    const page = await harness.launch();
+    await page.getByTestId("tab-events").click();
+
+    const firstName = await page.locator("[data-testid^='event-rename-input-']").first().inputValue();
+    await page.getByTestId("event-add-group-button").click();
+    await page.getByTestId("event-add-group-input").fill(firstName.toUpperCase());
+    await expect(page.getByTestId("event-add-group-error")).toContainText("already exists");
+
+    await page.getByTestId("event-add-group-input").fill("Desktop New Group");
+    await page.getByTestId("event-add-group-save").click();
+    const createdCard = page.locator("[data-testid^='event-group-']").filter({ hasText: "Desktop New Group" });
+    await expect(createdCard).toContainText("0 items");
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await createdCard.getByRole("button", { name: "Delete" }).click();
+    await expect(createdCard).toHaveCount(0);
+
+    await page.locator("[data-testid^='event-open-']").first().click();
+    await expect(page.getByTestId("event-group-detail-view")).toBeVisible();
+    await expect(page.getByTestId("event-virtual-grid")).toBeVisible();
+    await page.locator("[data-testid^='event-media-preview-']").first().click();
+    await expect(page.getByTestId("event-preview-overlay")).toBeVisible();
+    await page.getByTestId("event-preview-close").click();
+    await page.getByTestId("event-detail-back").click();
+    await expect(page.getByTestId("event-group-detail-view")).toHaveCount(0);
+  });
+
   test("date approval shows rendered thumbnails and approve/skip actions work", async () => {
     const review1 = `${harness.outputRoot}\\staging\\IMG_DATE_REVIEW_001.png`;
     const review2 = `${harness.outputRoot}\\staging\\IMG_DATE_REVIEW_002.png`;
