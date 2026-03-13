@@ -6,11 +6,20 @@ interface ProgressHeroProps {
   filed: number;
   needingReview: { images: number; dates: number };
   previewThumbnails?: string[];
+  progressPercent?: number;
   onAction: () => void;
 }
 
-export const ProgressHero: React.FC<ProgressHeroProps> = ({ total, filed, needingReview, previewThumbnails = [], onAction }) => {
+export const ProgressHero: React.FC<ProgressHeroProps> = ({
+  total,
+  filed,
+  needingReview,
+  previewThumbnails = [],
+  progressPercent,
+  onAction
+}) => {
   const percentage = total > 0 ? Math.round((filed / total) * 100) : 0;
+  const edgeProgress = Math.max(0, Math.min(100, progressPercent ?? percentage));
   const isComplete = total > 0 && filed >= total;
   const visibleThumbs = previewThumbnails.slice(0, 3);
 
@@ -51,7 +60,7 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({ total, filed, needin
         </div>
       </div>
       <div className="progressHeroEdgeBarTrack" aria-hidden="true">
-        <div className="progressHeroEdgeBarFill" data-testid="progress-hero-edge-fill" style={{ width: `${percentage}%` }} />
+        <div className="progressHeroEdgeBarFill" data-testid="progress-hero-edge-fill" style={{ width: `${edgeProgress}%` }} />
       </div>
     </div>
   );

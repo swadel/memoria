@@ -320,13 +320,16 @@ export function App() {
     }
   }
 
-  async function onRunGrouping() {
+  async function onRunGrouping(navigateToEvents = true) {
     setBusyAction("group");
     setPipelineStages((prev) => ({ ...prev, group: "running", finalize: "idle" }));
     try {
       await runEventGrouping();
       await refreshAll();
       setMessage("Event grouping complete.");
+      if (navigateToEvents) {
+        setTab("events");
+      }
     } catch (err) {
       setMessage(`Grouping failed: ${String(err)}`);
       setPipelineStages((prev) => ({ ...prev, group: "failed" }));
@@ -496,7 +499,6 @@ export function App() {
         disabled: busyAction !== null || stats.dateNeedsReview > 0 || stats.videoPhaseState !== "complete",
         onClick: () => {
           void onRunGrouping();
-          setTab("events");
         }
       },
       {
@@ -695,6 +697,7 @@ export function App() {
                 filed={stats.filed}
                 needingReview={{ images: stats.imageReview, dates: stats.dateNeedsReview }}
                 previewThumbnails={dashboardStackThumbs}
+                progressPercent={globalProgressPct}
                 onAction={() => {
                   if (dashboardPrimaryAction.disabled) return;
                   dashboardPrimaryAction.onClick();
@@ -766,7 +769,6 @@ export function App() {
                 disabled={busyAction !== null}
                 onClick={() => {
                   void onRunGrouping();
-                  setTab("events");
                 }}
               >
                 Done - Proceed to Event Grouping

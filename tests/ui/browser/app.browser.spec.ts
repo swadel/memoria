@@ -53,8 +53,9 @@ test.describe("Memoria browser UI", () => {
     await expect(page.getByTestId("dashboard-progress-copy")).toContainText("You've filed");
     await expect(page.getByTestId("progress-memory-stack")).toBeVisible();
     await expect(page.getByTestId("progress-hero-edge-fill")).toBeVisible();
-    const fillWidth = await page.getByTestId("progress-hero-edge-fill").evaluate((el) => getComputedStyle(el).width);
-    expect(Number.parseFloat(fillWidth)).toBeGreaterThan(0);
+    const fillStyle = await page.getByTestId("progress-hero-edge-fill").evaluate((el) => (el as HTMLElement).style.width);
+    const fillPercent = Number.parseFloat(fillStyle);
+    expect(fillPercent).toBeGreaterThan(40);
   });
 
   test("indexing uses LoadingState component with branded logo", async ({ context }) => {
@@ -66,9 +67,13 @@ test.describe("Memoria browser UI", () => {
     await expect(ingestPage.getByTestId("global-loading-state")).toBeVisible();
     await expect(ingestPage.getByTestId("loading-state-root")).toBeVisible();
     await expect(ingestPage.getByTestId("loading-state-logo")).toBeVisible();
-    await expect(ingestPage.getByTestId("loading-state-logo")).toHaveClass(/h-24/);
-    await expect(ingestPage.getByTestId("loading-state-logo")).toHaveClass(/w-24/);
     await expect(ingestPage.getByTestId("loading-state-logo")).toHaveClass(/mix-blend-multiply/);
+    const logoBox = await ingestPage.getByTestId("loading-state-logo").boundingBox();
+    expect(logoBox).not.toBeNull();
+    if (logoBox) {
+      expect(logoBox.width).toBeLessThanOrEqual(34);
+      expect(logoBox.height).toBeLessThanOrEqual(34);
+    }
     await expect(ingestPage.getByText("Indexing your media...")).toBeVisible();
     await ingestPage.close();
   });
@@ -152,6 +157,7 @@ test.describe("Memoria browser UI", () => {
     await expect(page.locator("[data-testid^='date-item-']")).toHaveCount(0);
     await expect(page.getByTestId("date-done-proceed-events")).toBeVisible();
     await page.getByTestId("date-done-proceed-events").click();
+    await expect(page.getByTestId("status-pill")).toContainText("Event grouping complete.");
 
     await expect(page.getByTestId("event-groups-card")).toBeVisible();
   });

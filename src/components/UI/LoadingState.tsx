@@ -12,8 +12,8 @@ export const LoadingState: React.FC<LoadingStateProps> = ({ message = "Processin
         <div className="absolute inset-0 bg-petal-blue/20 blur-3xl rounded-full animate-pulse" />
         <img
           src={logo}
-          className="relative h-12 w-12 object-contain mix-blend-multiply animate-pulse logoSmooth"
-          style={{ animationDuration: "3s" }}
+          className="relative object-contain mix-blend-multiply animate-pulse logoSmooth"
+          style={{ animationDuration: "3s", width: "32px", height: "32px", maxWidth: "32px", maxHeight: "32px" }}
           data-testid="loading-state-logo"
           alt="Memoria Logo"
         />
