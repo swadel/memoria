@@ -34,6 +34,7 @@ body {
   backdrop-filter: blur(20px);
   background: rgba(255, 255, 255, 0.7);
   padding-bottom: 4px;
+  border-radius: 16px;
 }
 
 .globalProgressTrack {
@@ -73,9 +74,10 @@ body {
 }
 
 .appLogo {
-  position: relative;
+  display: block;
   width: 40px;
   height: 40px;
+  object-fit: contain;
 }
 
 .appLogoPetal {
@@ -107,9 +109,9 @@ body {
 
 .title {
   margin: 0;
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 600;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.045em;
 }
 
 .subtitle {
@@ -215,6 +217,22 @@ body {
   font-weight: 600;
 }
 
+.workflowStepBadge {
+  margin-left: 2px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #9a3412;
+  background: rgba(253, 186, 116, 0.45);
+  border: 1px solid rgba(249, 115, 22, 0.4);
+}
+
 .workflowStepComplete {
   background: rgba(236, 253, 243, 0.9);
   color: #0a7a32;
@@ -285,7 +303,7 @@ body {
 }
 
 .card {
-  background: rgba(255, 255, 255, 0.9);
+  background: #ffffff;
   border: 1px solid transparent;
   border-radius: 16px;
   padding: 16px;
@@ -512,6 +530,9 @@ button:hover {
 .eventGroupFlowerLogo {
   width: 36px;
   height: 36px;
+  object-fit: contain;
+  filter: saturate(0.8);
+  opacity: 0.9;
 }
 
 .eventGroupOpenButton {
@@ -525,6 +546,13 @@ button:hover {
   margin-bottom: 10px;
   display: flex;
   justify-content: space-between;
+}
+
+.eventFloatingSelectedText {
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 10px;
 }
 
 .eventVirtualGridViewport {
@@ -560,6 +588,14 @@ button:hover {
 .eventThumbCard.selected {
   border-color: #0a6de3;
   box-shadow: 0 0 0 3px rgba(10, 109, 227, 0.15);
+}
+
+.eventThumbPulse {
+  animation: eventThumbPulse 220ms ease-out;
+}
+
+.eventThumbFlyAway {
+  animation: eventThumbFlyAway 240ms ease-in forwards;
 }
 
 .eventThumbSelectButton {
@@ -723,6 +759,12 @@ button:hover {
   font-size: 28px;
 }
 
+.itemRemoving {
+  transform: scale(0.8);
+  opacity: 0;
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+
 .floatingSelectionBar {
   position: fixed;
   left: 50%;
@@ -766,6 +808,58 @@ button:hover {
   align-items: center;
   justify-content: center;
   font-weight: 700;
+}
+
+.eventMoveDialog {
+  width: min(480px, 92vw);
+  border-radius: 16px;
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.2);
+}
+
+.eventMoveSuccessPill {
+  display: inline-flex;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #0f766e;
+  background: rgba(20, 184, 166, 0.16);
+  border: 1px solid rgba(20, 184, 166, 0.35);
+  animation: fadeSlideIn 220ms ease;
+}
+
+.eventGroupDetailEmptyState {
+  position: relative;
+  min-height: 300px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  background: #f8fafc;
+  margin: 8px 0 12px;
+}
+
+.eventGroupDetailEmptyMessage {
+  position: relative;
+  z-index: 1;
+  font-size: 15px;
+  color: #475569;
+  font-weight: 560;
+}
+
+.eventDeleteEmptyGhost {
+  position: relative;
+  z-index: 1;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 999px;
+}
+
+[data-hidden="true"] > .eventVirtualGridViewport {
+  display: none;
 }
 
 .eventPreviewAsset {
@@ -877,10 +971,14 @@ button:hover {
 
 .emptyStateFlower {
   position: absolute;
-  width: 130px;
-  height: 130px;
-  opacity: 0.18;
-  filter: saturate(0.9);
+  width: 260px;
+  height: 260px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0.03;
+  filter: grayscale(0.15) saturate(0.55);
+  object-fit: contain;
 }
 
 .emptyStateMessage {
@@ -899,6 +997,32 @@ button:hover {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes eventThumbPulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35);
+  }
+  45% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.16);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+}
+
+@keyframes eventThumbFlyAway {
+  from {
+    opacity: 1;
+    transform: scale(1) translate(0, 0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.62) translate(-110px, -120px);
   }
 }
 
@@ -976,6 +1100,89 @@ button:hover {
   gap: 10px;
 }
 
+.dashboardCanvas {
+  background: #f8fafc;
+}
+
+.dashboardHeroShell {
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.progressHeroRoot {
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.1);
+}
+
+.progressHeroContent {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 6px 2px 10px;
+}
+
+.progressHeroHeading {
+  font-size: 28px;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+}
+
+.progressHeroSubtext {
+  color: #475569;
+  font-size: 18px;
+}
+
+.progressHeroButton {
+  border: none;
+  border-radius: 999px;
+}
+
+.progressHeroIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.9);
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.08);
+}
+
+.progressHeroIconImage {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+.loadingStateOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.44);
+}
+
+.dashboardResetRow {
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.dashboardGhostReset {
+  font-size: 12px;
+  color: #64748b;
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.dashboardGhostReset:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
 .reviewQueueGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1001,7 +1208,8 @@ button:hover {
 .eventThumbCard:hover,
 .eventGroupCard:hover,
 .queueSummaryCard:hover {
-  transform: translateY(-2px);
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.14);
 }
 
 .queueSummaryValue {

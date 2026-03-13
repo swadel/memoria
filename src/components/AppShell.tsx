@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import logoImage from "../assets/logo.png";
 
 export function AppShell({
   title,
@@ -22,16 +23,17 @@ export function AppShell({
       <div className="globalProgressTrack" aria-hidden="true">
         <div className="globalProgressFill" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
       </div>
-      <header className="appShellHeader">
-        <div className="topbar mica-surface">
+      <header className="appShellHeader mica-surface bg-white/70 backdrop-blur-xl">
+        <div className="topbar">
           <div className="appBrand">
-            <span className="appLogo" aria-hidden="true">
-              <span className="appLogoPetal appLogoPetalBlue" />
-              <span className="appLogoPetal appLogoPetalOrange" />
-              <span className="appLogoPetal appLogoPetalPurple" />
-            </span>
+            <img
+              src={logoImage}
+              alt=""
+              aria-hidden="true"
+              className="appLogo h-10 w-10 drop-shadow-[0_2px_10px_rgba(0,0,0,0.1)]"
+            />
             <div>
-            <h1 className="title">{title}</h1>
+            <h1 className="title font-semibold text-2xl tracking-tighter">{title}</h1>
             <p className="subtitle">{subtitle}</p>
             </div>
           </div>
@@ -39,7 +41,7 @@ export function AppShell({
             {status}
           </div>
         </div>
-        <div className="workflowHeader mica-surface" data-testid="tab-strip">
+        <div className="workflowHeader" data-testid="tab-strip">
           {stepper}
           {settingsAction ? <div className="workflowHeaderAction">{settingsAction}</div> : null}
         </div>

@@ -3,7 +3,7 @@ export type WorkflowStepState = "complete" | "current" | "pending";
 export function WorkflowStepper({
   steps
 }: {
-  steps: Array<{ id: string; label: string; state: WorkflowStepState; disabled?: boolean; onClick?: () => void; testId?: string }>;
+  steps: Array<{ id: string; label: string; state: WorkflowStepState; disabled?: boolean; onClick?: () => void; testId?: string; pendingCount?: number }>;
 }) {
   return (
     <div className="workflowStepper" data-testid="workflow-stepper">
@@ -24,6 +24,9 @@ export function WorkflowStepper({
               <span className="workflowStepPetalDot workflowStepPetalDotC" />
             </span>
             <span className="workflowStepLabel">{step.label}</span>
+            {step.pendingCount && step.pendingCount > 0 ? (
+              <span className="workflowStepBadge" data-testid={`workflow-step-badge-${step.id}`}>{step.pendingCount}</span>
+            ) : null}
           </button>
           {index < steps.length - 1 ? <div className="workflowStepConnector" aria-hidden="true" /> : null}
         </div>

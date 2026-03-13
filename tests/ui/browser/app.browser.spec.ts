@@ -16,16 +16,17 @@ test.describe("Memoria browser UI", () => {
     await expect(page.getByTestId("workflow-step-finalize")).toContainText("Finalize");
     await expect(page.getByTestId("dashboard-pipeline-card")).toHaveCount(0);
 
-    await expect(page.getByTestId("stat-total")).toBeVisible();
-    await expect(page.getByTestId("stat-indexed")).toBeVisible();
-    await expect(page.getByTestId("stat-image-review")).toBeVisible();
-    await expect(page.getByTestId("stat-image-verified")).toBeVisible();
-    await expect(page.getByTestId("stat-date-review")).toBeVisible();
-    await expect(page.getByTestId("stat-date-verified")).toBeVisible();
-    await expect(page.getByTestId("stat-grouped")).toBeVisible();
-    await expect(page.getByTestId("stat-filed")).toBeVisible();
+    await expect(page.getByTestId("stat-image-review")).toHaveCount(0);
+    await expect(page.getByTestId("stat-image-verified")).toHaveCount(0);
+    await expect(page.getByTestId("stat-date-review")).toHaveCount(0);
+    await expect(page.getByTestId("stat-date-verified")).toHaveCount(0);
+    await expect(page.getByTestId("stat-total")).toHaveCount(0);
+    await expect(page.getByTestId("stat-indexed")).toHaveCount(0);
+    await expect(page.getByTestId("stat-grouped")).toHaveCount(0);
+    await expect(page.getByTestId("stat-filed")).toHaveCount(0);
     await expect(page.getByTestId("stat-errors")).toHaveCount(0);
     await expect(page.getByTestId("dashboard-video-review-tile")).toHaveCount(0);
+    await expect(page.getByTestId("dashboard-progress-hero")).toBeVisible();
   });
 
   test("image review supports flagged and burst workflows", async ({ page }) => {
@@ -109,12 +110,12 @@ test.describe("Memoria browser UI", () => {
     const resetPage = await context.newPage();
     await installBrowserApiMock(resetPage, "reset-slow");
     await resetPage.goto("/");
-    await expect(resetPage.getByTestId("stat-total")).toContainText("8");
+    await expect(resetPage.getByTestId("dashboard-progress-copy")).toContainText("of 8 items.");
     await resetPage.getByTestId("pipeline-reset-session").click();
     const keepBtn = resetPage.getByTestId("reset-session-keep-files");
     await keepBtn.click();
     await expect(resetPage.getByTestId("reset-session-loading")).toBeVisible();
-    await expect(resetPage.getByTestId("stat-total")).toContainText("0");
+    await expect(resetPage.getByTestId("dashboard-progress-copy")).toContainText("0 of 0 items.");
     await resetPage.close();
   });
 
@@ -131,10 +132,10 @@ test.describe("Memoria browser UI", () => {
   });
 
   test("reset cancel closes dialog without running reset", async ({ page }) => {
-    await expect(page.getByTestId("stat-total")).toContainText("8");
+    await expect(page.getByTestId("dashboard-progress-copy")).toContainText("of 8 items.");
     await page.getByTestId("pipeline-reset-session").click();
     await page.getByTestId("reset-session-cancel").click();
     await expect(page.getByTestId("reset-session-dialog")).toHaveCount(0);
-    await expect(page.getByTestId("stat-total")).toContainText("8");
+    await expect(page.getByTestId("dashboard-progress-copy")).toContainText("of 8 items.");
   });
 });

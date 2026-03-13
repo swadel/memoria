@@ -5,11 +5,7 @@
 }
 
 .mica-surface {
-  backdrop-filter: blur(12px);
-  background: linear-gradient(
-    180deg,
-    rgba(248, 250, 252, 0.72),
-    rgba(255, 255, 255, 0.62)
-  );
+  backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.48);
 }

@@ -1,9 +1,13 @@
-import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type ComponentProps, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { AnimatePresence, motion } from "framer-motion";
 import { AppShell } from "./components/AppShell";
+import { ProgressHero } from "./components/Dashboard/ProgressHero";
+import { LoadingState } from "./components/UI/LoadingState";
 import { PageHeader } from "./components/PageHeader";
 import { ReviewToolbar } from "./components/ReviewToolbar";
 import { WorkflowStepper, type WorkflowStepState } from "./components/WorkflowStepper";
+import logoImage from "./assets/logo.png";
 import {
   applyDateApproval,
   completeImageReviewAndStartVideoReview,
@@ -83,6 +87,22 @@ const DEFAULT_STATS: DashboardStats = {
 
 const POLL_INTERVAL_MS = Number(import.meta.env.VITE_REFRESH_INTERVAL_MS ?? "3000");
 const DISABLE_UI_POLLING = import.meta.env.VITE_E2E_DISABLE_POLLING === "1";
+const PHASE_VIEW_VARIANTS = {
+  initial: { y: 20, opacity: 0 },
+  animate: { y: 0, opacity: 1 },
+  exit: { y: 8, opacity: 0 }
+};
+const GRID_CONTAINER_VARIANTS = {
+  hidden: { opacity: 0.98 },
+  show: {
+    opacity: 1,
+    transition: { staggerChildren: 0.05, delayChildren: 0.02 }
+  }
+};
+const GRID_ITEM_VARIANTS = {
+  hidden: { opacity: 0, scale: 0.9, y: 8 },
+  show: { opacity: 1, scale: 1, y: 0 }
+};
 
 function derivePipelineStages(stats: DashboardStats): Record<PipelineStage, PipelineStageState> {
   const indexCompleted = stats.total > 0;
@@ -163,6 +183,8 @@ export function App() {
   const [eventMoveNewGroupName, setEventMoveNewGroupName] = useState("");
   const [eventMoveError, setEventMoveError] = useState("");
   const [showMoveDialog, setShowMoveDialog] = useState(false);
+  const [movingItemIds, setMovingItemIds] = useState<number[]>([]);
+  const [moveSuccessTick, setMoveSuccessTick] = useState(0);
   const [previewItem, setPreviewItem] = useState<EventGroupItem | null>(null);
   const [previewSrc, setPreviewSrc] = useState<string>("");
   const [toolHealth, setToolHealth] = useState<ToolHealth | null>(null);
@@ -326,11 +348,6 @@ export function App() {
     }
   }
 
-  const dashboardSummary = useMemo(
-    () =>
-      `${stats.imageReview} images, ${stats.videoFlagged} videos, ${stats.dateNeedsReview} dates and ${groups.length} groups currently in review queues.`,
-    [stats.imageReview, stats.videoFlagged, stats.dateNeedsReview, groups.length]
-  );
   const dashboardPrimaryAction = useMemo(() => {
     if (stats.total === 0) {
       return {
@@ -388,6 +405,7 @@ export function App() {
         id: "image",
         label: "Image Review",
         state: stateById.image,
+        pendingCount: stats.imageReview,
         testId: "tab-images",
         disabled: busyAction !== null || stats.total === 0,
         onClick: () => {
@@ -410,6 +428,7 @@ export function App() {
         id: "date",
         label: "Date Approval",
         state: stateById.date,
+        pendingCount: stats.dateNeedsReview,
         testId: "tab-dates",
         disabled: busyAction !== null || stats.videoPhaseState !== "complete",
         onClick: () => {
@@ -442,6 +461,13 @@ export function App() {
     const completeCount = workflowSteps.filter((step) => step.state === "complete").length;
     return (completeCount / 6) * 100;
   }, [workflowSteps]);
+  const loadingMessage = useMemo(() => {
+    if (busyAction === "ingest") return "Indexing your media library...";
+    if (busyAction === "date-enforcement") return "Estimating dates with AI...";
+    if (busyAction === "group") return "Generating event names with AI...";
+    if (busyAction === "finalize") return "Finalizing folders and organizing files...";
+    return null;
+  }, [busyAction]);
 
   const normalizedGroupNames = useMemo(() => new Set(groups.map((group) => normalizeName(group.name))), [groups]);
   const activeGroup = useMemo(
@@ -529,26 +555,32 @@ export function App() {
     if (!activeGroupId || selectedItemIds.length === 0) {
       return;
     }
+    const idsToMove = [...selectedItemIds];
+    setMovingItemIds(idsToMove);
     setBusyAction("move-group-items");
     setEventMoveError("");
     try {
+      await new Promise((resolve) => setTimeout(resolve, 240));
       if (eventMoveMode === "existing") {
         if (!eventMoveTargetGroupId) {
           setEventMoveError("Choose a destination group");
+          setMovingItemIds([]);
           return;
         }
-        await moveEventGroupItems(selectedItemIds, eventMoveTargetGroupId);
+        await moveEventGroupItems(idsToMove, eventMoveTargetGroupId);
       } else {
         const normalized = normalizeName(eventMoveNewGroupName);
         if (!normalized) {
           setEventMoveError("Group name is required");
+          setMovingItemIds([]);
           return;
         }
         if (normalizedGroupNames.has(normalized)) {
           setEventMoveError("A group with this name already exists");
+          setMovingItemIds([]);
           return;
         }
-        await createEventGroupAndMove(eventMoveNewGroupName.trim(), selectedItemIds);
+        await createEventGroupAndMove(eventMoveNewGroupName.trim(), idsToMove);
       }
       const [nextGroups, nextItems] = await Promise.all([getEventGroups(), getEventGroupItems(activeGroupId, false)]);
       setGroups(nextGroups);
@@ -556,10 +588,12 @@ export function App() {
       setSelectedItemIds([]);
       setLastSelectedIndex(null);
       setShowMoveDialog(false);
+      setMoveSuccessTick((prev) => prev + 1);
       setMessage("Moved selected items.");
     } catch (err) {
       setEventMoveError(String(err));
     } finally {
+      setMovingItemIds([]);
       setBusyAction(null);
     }
   }
@@ -577,57 +611,67 @@ export function App() {
         </button>
       }
     >
-
-      {tab === "dashboard" && (
-        <>
-          <div className="card dashboardHero pageTransition">
-            <PageHeader
-              title="Workflow Overview"
-              summary={dashboardSummary}
-              action={
-                <button className="primaryBtn" onClick={dashboardPrimaryAction.onClick} disabled={dashboardPrimaryAction.disabled} data-testid="dashboard-primary-action">
-                  {dashboardPrimaryAction.label}
-                </button>
-              }
-            />
-            <div className="reviewQueueGrid">
-              <QueueSummaryCard title="Images Needing Review" value={stats.imageReview} subtitle="Flagged for image review decisions" />
-              <QueueSummaryCard title="Videos Needing Review" value={stats.videoFlagged} subtitle="Flagged clips before date checks" />
-              <QueueSummaryCard title="Dates Needing Approval" value={stats.dateNeedsReview} subtitle="Awaiting date approval actions" />
-              <QueueSummaryCard title="Groups Awaiting Review" value={groups.length} subtitle="Event groups ready for curation" />
+      {loadingMessage ? (
+        <div className="loadingStateOverlay mica-surface bg-white/40 backdrop-blur-md" data-testid="global-loading-state">
+          <LoadingState message={loadingMessage} />
+        </div>
+      ) : null}
+      <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={tab}
+        variants={PHASE_VIEW_VARIANTS}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        transition={{ duration: 0.22, ease: "easeOut" }}
+      >
+      <AnimatePresence mode="wait">
+        {tab === "dashboard" && (
+          <motion.div
+            key="dashboard-phase"
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 10, opacity: 0 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+            className="dashboardCanvas"
+          >
+            <div className="dashboardHeroShell">
+              <ProgressHero
+                total={stats.total}
+                filed={stats.filed}
+                needingReview={{ images: stats.imageReview, dates: stats.dateNeedsReview }}
+                onAction={() => {
+                  if (dashboardPrimaryAction.disabled) return;
+                  dashboardPrimaryAction.onClick();
+                }}
+              />
             </div>
-            {stats.imageReview === 0 && stats.videoFlagged === 0 && stats.dateNeedsReview === 0 && groups.length === 0 ? (
-              <EmptyStateBanner />
-            ) : null}
-          </div>
+            <div className="row dashboardResetRow">
+              <button
+                data-testid="pipeline-reset-session"
+                className="textBtn dashboardGhostReset"
+                disabled={busyAction !== null}
+                onClick={() => {
+                  setResetError("");
+                  setShowResetPrompt(true);
+                }}
+              >
+                {busyAction === "reset" ? "Resetting..." : "Reset Session"}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          <div className="statsGrid pageTransition" data-testid="dashboard-stats-grid">
-            <StatCard label="Total" value={stats.total} testId="stat-total" />
-            <StatCard label="Indexed" value={stats.indexed} testId="stat-indexed" />
-            <StatCard label="Image Review" value={stats.imageReview} testId="stat-image-review" />
-            <StatCard label="Image Verified" value={stats.imageVerified} testId="stat-image-verified" />
-            <StatCard label="Date Review" value={stats.dateReview} testId="stat-date-review" />
-            <StatCard label="Date Verified" value={stats.dateVerified} testId="stat-date-verified" />
-            <StatCard label="Grouped" value={stats.grouped} testId="stat-grouped" />
-            <StatCard label="Filed" value={stats.filed} testId="stat-filed" />
-          </div>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <button
-              data-testid="pipeline-reset-session"
-              className="textBtn"
-              disabled={busyAction !== null}
-              onClick={() => {
-                setResetError("");
-                setShowResetPrompt(true);
-              }}
-            >
-              {busyAction === "reset" ? "Resetting..." : "Reset Session"}
-            </button>
-          </div>
-        </>
-      )}
-
+      <AnimatePresence mode="wait">
       {tab === "dates" && (
+        <motion.div
+          key="dates-phase"
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 10, opacity: 0 }}
+          transition={{ duration: 0.22, ease: "easeOut" }}
+        >
         <div className="card pageTransition" data-testid="date-approval-card">
           <PageHeader
             title="Date Approval"
@@ -660,9 +704,19 @@ export function App() {
             </div>
           )}
         </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
+      <AnimatePresence mode="wait">
       {tab === "images" && (
+        <motion.div
+          key="images-phase"
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 10, opacity: 0 }}
+          transition={{ duration: 0.22, ease: "easeOut" }}
+        >
         <div className="card pageTransition" data-testid="image-review-card">
           <PageHeader
             title="Image Review"
@@ -703,9 +757,19 @@ export function App() {
             }}
           />
         </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
+      <AnimatePresence mode="wait">
       {tab === "videos" && (
+        <motion.div
+          key="videos-phase"
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 10, opacity: 0 }}
+          transition={{ duration: 0.22, ease: "easeOut" }}
+        >
         <div className="card pageTransition" data-testid="video-review-card">
           <PageHeader
             title="Video Review"
@@ -727,9 +791,19 @@ export function App() {
             }}
           />
         </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
+      <AnimatePresence mode="wait">
       {tab === "events" && (
+        <motion.div
+          key="events-phase"
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 10, opacity: 0 }}
+          transition={{ duration: 0.22, ease: "easeOut" }}
+        >
         <div className="card pageTransition" data-testid="event-groups-card">
           <PageHeader
             title="Event Groups"
@@ -748,6 +822,9 @@ export function App() {
               onBack={() => setActiveGroupId(null)}
               onOpenPreview={(item) => setPreviewItem(item)}
               onMoveSelected={openMoveDialog}
+              movingItemIds={movingItemIds}
+              moveSuccessTick={moveSuccessTick}
+              onDeleteEmptyGroup={activeGroup.itemCount === 0 ? async () => onDeleteGroup(activeGroup) : undefined}
               onExcludeItem={async (id) => {
                 await excludeMediaItem(id);
                 if (activeGroupId) {
@@ -791,14 +868,14 @@ export function App() {
             <>
               <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
                 <h3 style={{ margin: 0 }}>Event Group Review</h3>
-                <button
+                <MotionPrimaryButton
                   data-testid="event-add-group-button"
                   className="primaryBtn"
                   disabled={busyAction !== null}
                   onClick={() => setShowAddGroupForm((prev) => !prev)}
                 >
                   Add Group
-                </button>
+                </MotionPrimaryButton>
               </div>
               {showAddGroupForm && (
                 <div className="item" data-testid="event-add-group-form">
@@ -836,31 +913,54 @@ export function App() {
                   ) : null}
                 </div>
               )}
-              <div className="eventGroupsGrid" data-testid="event-groups-review-grid">
-                {groups.map((group) => (
-                  <EventCard
+              <motion.div
+                className="eventGroupsGrid"
+                data-testid="event-groups-review-grid"
+                variants={GRID_CONTAINER_VARIANTS}
+                initial="hidden"
+                animate="show"
+                layout
+              >
+                {groups.map((group, index) => (
+                  <motion.div
                     key={group.id}
-                    group={group}
-                    allGroupNames={groups.map((entry) => entry.name)}
-                    onOpen={() => {
-                      setActiveGroupShowExcluded(false);
-                      setActiveGroupId(group.id);
-                    }}
-                    onRename={async (name) => {
-                      await renameEventGroup(group.id, name);
-                      await refreshAll();
-                    }}
-                    onDelete={group.itemCount === 0 ? async () => onDeleteGroup(group) : undefined}
-                    busy={busyAction !== null}
-                  />
+                    variants={GRID_ITEM_VARIANTS}
+                    layout
+                    transition={{ delay: Math.min(index * 0.05, 0.35), duration: 0.2 }}
+                  >
+                    <EventCard
+                      group={group}
+                      allGroupNames={groups.map((entry) => entry.name)}
+                      onOpen={() => {
+                        setActiveGroupShowExcluded(false);
+                        setActiveGroupId(group.id);
+                      }}
+                      onRename={async (name) => {
+                        await renameEventGroup(group.id, name);
+                        await refreshAll();
+                      }}
+                      onDelete={group.itemCount === 0 ? async () => onDeleteGroup(group) : undefined}
+                      busy={busyAction !== null}
+                    />
+                  </motion.div>
                 ))}
-              </div>
+              </motion.div>
             </>
           )}
         </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
+      <AnimatePresence mode="wait">
       {tab === "settings" && (
+        <motion.div
+          key="settings-phase"
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 10, opacity: 0 }}
+          transition={{ duration: 0.22, ease: "easeOut" }}
+        >
         <div className="card pageTransition" data-testid="settings-card">
           <PageHeader title="Settings" summary="Manage directories, API keys, AI models, and dependency health." />
           <h4 className="settingsSectionTitle" data-testid="settings-section-tool-health">Dependency Health</h4>
@@ -923,7 +1023,7 @@ export function App() {
             </div>
           </div>
           <div className="row">
-            <button
+            <MotionPrimaryButton
               data-testid="settings-save-directories"
               className="primaryBtn"
               onClick={async () => {
@@ -937,7 +1037,7 @@ export function App() {
               }}
             >
               Save Directories
-            </button>
+            </MotionPrimaryButton>
           </div>
 
           <h4 className="settingsSectionTitle" data-testid="settings-section-api-keys">API Keys</h4>
@@ -1031,12 +1131,16 @@ export function App() {
             </button>
           </div>
         </div>
+        </motion.div>
       )}
+      </AnimatePresence>
+      </motion.div>
+      </AnimatePresence>
 
       {showMoveDialog && (
         <div className="lightboxOverlay" data-testid="event-move-overlay" onClick={() => setShowMoveDialog(false)}>
           <div
-            className="lightboxCard"
+            className="lightboxCard eventMoveDialog mica-surface bg-white/40 backdrop-blur-md"
             role="dialog"
             aria-label="Move selected items"
             data-testid="event-move-dialog"
@@ -1147,9 +1251,9 @@ export function App() {
               </div>
             ) : null}
             <div className="row">
-              <button data-testid="reset-session-delete-files" className="primaryBtn" disabled={busyAction !== null} onClick={() => void onResetSession(true)}>
+              <MotionPrimaryButton data-testid="reset-session-delete-files" className="primaryBtn" disabled={busyAction !== null} onClick={() => void onResetSession(true)}>
                 {resetMode === "delete" && busyAction === "reset" ? "Resetting..." : "Reset and Delete Files"}
-              </button>
+              </MotionPrimaryButton>
               <button data-testid="reset-session-keep-files" className="secondaryBtn" disabled={busyAction !== null} onClick={() => void onResetSession(false)}>
                 {resetMode === "state" && busyAction === "reset" ? "Resetting..." : "Reset App State Only"}
               </button>
@@ -1164,22 +1268,20 @@ export function App() {
   );
 }
 
-function StatCard({ label, value, danger, testId }: { label: string; value: number; danger?: boolean; testId?: string }) {
+function MotionPrimaryButton({
+  className,
+  children,
+  ...props
+}: ComponentProps<typeof motion.button>) {
   return (
-    <div className="card statCard" data-testid={testId}>
-      <div className="muted">{label}</div>
-      <div className={danger ? "statValue danger" : "statValue"}>{value}</div>
-    </div>
-  );
-}
-
-function QueueSummaryCard({ title, value, subtitle }: { title: string; value: number; subtitle: string }) {
-  return (
-    <div className="queueSummaryCard">
-      <div className="queueSummaryValue">{value}</div>
-      <div className="queueSummaryTitle">{title}</div>
-      <div className="muted">{subtitle}</div>
-    </div>
+    <motion.button
+      whileHover={{ scale: 1.02 }}
+      whileTap={{ scale: 0.98 }}
+      className={className}
+      {...props}
+    >
+      {children}
+    </motion.button>
   );
 }
 
@@ -1188,6 +1290,7 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
   const [thumbSrc, setThumbSrc] = useState<string>("");
   const [busyAction, setBusyAction] = useState<"approve" | "skip" | null>(null);
   const [showWhy, setShowWhy] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1209,11 +1312,16 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
 
   async function handleApply(nextDate: string | null, action: "approve" | "skip") {
     if (busyAction) return;
+    if (action === "approve") {
+      setRemoving(true);
+      await new Promise((resolve) => setTimeout(resolve, 140));
+    }
     setBusyAction(action);
     try {
       await onApply(nextDate);
     } catch {
       // Parent updates user-facing error state.
+      setRemoving(false);
     } finally {
       setBusyAction(null);
     }
@@ -1223,7 +1331,7 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
   const confidenceClass = confidencePct >= 80 ? "dateConfidenceHigh" : confidencePct >= 55 ? "dateConfidenceMedium" : "dateConfidenceLow";
 
   return (
-    <div className="item dateItemCard" data-testid={`date-item-${item.mediaItemId}`}>
+    <div className={`item dateItemCard ${removing ? "itemRemoving" : ""}`} data-testid={`date-item-${item.mediaItemId}`}>
       <div className="dateApprovalCardGrid">
         <img
           className="dateThumb"
@@ -1262,7 +1370,7 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
       </div>
       <div className="row dateActionRow">
         <input type="date" data-testid={`date-input-${item.mediaItemId}`} value={value} onChange={(e) => setValue(e.target.value)} />
-        <button
+        <MotionPrimaryButton
           data-testid={`date-approve-${item.mediaItemId}`}
           className="primaryBtn"
           disabled={busyAction !== null}
@@ -1271,7 +1379,7 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
           }}
         >
           {busyAction === "approve" ? "Approving..." : "Approve"}
-        </button>
+        </MotionPrimaryButton>
         <button
           data-testid={`date-edit-${item.mediaItemId}`}
           className="secondaryBtn"
@@ -1340,11 +1448,7 @@ function EventCard({
         onClick={onOpen}
       >
         <div className="eventGroupCoverPlaceholder" aria-hidden="true">
-          <span className="appLogo eventGroupFlowerLogo">
-            <span className="appLogoPetal appLogoPetalBlue" />
-            <span className="appLogoPetal appLogoPetalOrange" />
-            <span className="appLogoPetal appLogoPetalPurple" />
-          </span>
+          <img src={logoImage} alt="" className="eventGroupFlowerLogo" />
         </div>
         <strong>{group.folderName}</strong>
       </button>
@@ -1410,6 +1514,9 @@ function EventGroupDetailView({
   onBack,
   onOpenPreview,
   onMoveSelected,
+  movingItemIds,
+  moveSuccessTick,
+  onDeleteEmptyGroup,
   onExcludeItem,
   onBulkExclude,
   onRestoreItem
@@ -1425,6 +1532,9 @@ function EventGroupDetailView({
   onBack: () => void;
   onOpenPreview: (item: EventGroupItem) => void;
   onMoveSelected: () => void;
+  movingItemIds: number[];
+  moveSuccessTick: number;
+  onDeleteEmptyGroup?: () => Promise<void>;
   onExcludeItem: (id: number) => Promise<void>;
   onBulkExclude: (ids: number[]) => Promise<void>;
   onRestoreItem: (id: number) => Promise<void>;
@@ -1434,6 +1544,8 @@ function EventGroupDetailView({
   const [columnCount, setColumnCount] = useState(4);
   const [scrollHeight, setScrollHeight] = useState(500);
   const [confirmBulkExclude, setConfirmBulkExclude] = useState(false);
+  const [pulseIds, setPulseIds] = useState<number[]>([]);
+  const [showMoveSuccess, setShowMoveSuccess] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1472,6 +1584,15 @@ function EventGroupDetailView({
     overscan: 3
   });
   const selected = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
+  const movingSet = useMemo(() => new Set(movingItemIds), [movingItemIds]);
+  const pulseSet = useMemo(() => new Set(pulseIds), [pulseIds]);
+
+  useEffect(() => {
+    if (!moveSuccessTick) return;
+    setShowMoveSuccess(true);
+    const timer = window.setTimeout(() => setShowMoveSuccess(false), 900);
+    return () => window.clearTimeout(timer);
+  }, [moveSuccessTick]);
 
   function toggleSelection(index: number, shiftKey: boolean) {
     if (showExcluded) return;
@@ -1488,6 +1609,8 @@ function EventGroupDetailView({
         }
         return Array.from(next);
       });
+      setPulseIds(rangeIds);
+      window.setTimeout(() => setPulseIds([]), 260);
     } else {
       setSelectedItemIds((prev) =>
         prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]
@@ -1503,6 +1626,7 @@ function EventGroupDetailView({
           <button data-testid="event-detail-back" className="secondaryBtn" onClick={onBack}>
             Back to Event Group Review
           </button>
+          {showMoveSuccess ? <span className="eventMoveSuccessPill">Moved</span> : null}
           <h3 style={{ margin: "8px 0 0" }}>{group.folderName}</h3>
         </div>
         <div className="row">
@@ -1549,22 +1673,27 @@ function EventGroupDetailView({
         </div>
       </div>
       {selectedItemIds.length > 0 && !showExcluded && (
-        <div className="item eventSelectionToolbar" data-testid="event-selection-toolbar">
-          <strong>{selectedItemIds.length} selected</strong>
-          <button
-            data-testid="event-move-selected"
-            className="primaryBtn"
-            onClick={onMoveSelected}
-          >
-            Move to Group
-          </button>
-          <button
-            data-testid="event-exclude-selected"
-            className="secondaryBtn"
-            onClick={() => setConfirmBulkExclude(true)}
-          >
-            Exclude Selected
-          </button>
+        <div data-testid="event-selection-toolbar">
+          <FloatingSelectionBar>
+            <strong className="eventFloatingSelectedText">{selectedItemIds.length} selected</strong>
+            <button
+              data-testid="event-move-selected"
+              className="selectionBarButton"
+              onClick={onMoveSelected}
+            >
+              Move to Group
+            </button>
+            <button
+              data-testid="event-exclude-selected"
+              className="selectionBarButton"
+              onClick={() => setConfirmBulkExclude(true)}
+            >
+              Exclude Selected
+            </button>
+            <button data-testid="event-cancel-selected" className="selectionBarButton" onClick={() => setSelectedItemIds([])}>
+              Cancel
+            </button>
+          </FloatingSelectionBar>
         </div>
       )}
       {confirmBulkExclude && selectedItemIds.length > 0 && !showExcluded ? (
@@ -1591,7 +1720,24 @@ function EventGroupDetailView({
           </div>
         </div>
       ) : null}
-      <div ref={scrollWrapperRef} style={{ flex: 1 }}>
+      {!showExcluded && items.length === 0 ? (
+        <div className="eventGroupDetailEmptyState" data-testid="event-group-detail-empty">
+          <img src={logoImage} alt="" aria-hidden="true" className="emptyStateFlower" />
+          <p className="eventGroupDetailEmptyMessage">This group is empty. You can delete it or add new items.</p>
+          {onDeleteEmptyGroup ? (
+            <button
+              data-testid="event-delete-empty-group"
+              className="textBtn eventDeleteEmptyGhost"
+              onClick={() => {
+                void onDeleteEmptyGroup();
+              }}
+            >
+              Delete Empty Group
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <div ref={scrollWrapperRef} style={{ flex: 1 }} data-hidden={!showExcluded && items.length === 0 ? "true" : "false"}>
         <div
           className="eventVirtualGridViewport"
           ref={containerRef}
@@ -1605,9 +1751,10 @@ function EventGroupDetailView({
             position: "relative"
           }}
         >
-          <div
+          <motion.div
             data-testid="event-virtual-grid-inner"
             data-total-size={rowVirtualizer.getTotalSize()}
+            layout
             style={{
               height: `${rowVirtualizer.getTotalSize()}px`,
               position: "relative",
@@ -1619,13 +1766,17 @@ function EventGroupDetailView({
             const rowItems = items.slice(startIndex, startIndex + columnCount);
             const emptySlotCount = calculateEmptySlotsInRow(rowItems.length, columnCount);
             return (
-              <div
+              <motion.div
                 key={virtualRow.key}
                 data-testid={`event-virtual-row-${virtualRow.index}`}
                 data-index={virtualRow.index}
                 data-measure-element="true"
                 className="eventVirtualRow"
                 ref={rowVirtualizer.measureElement}
+                layout
+                variants={GRID_CONTAINER_VARIANTS}
+                initial="hidden"
+                animate="show"
                 style={{
                   position: "absolute",
                   top: virtualRow.start,
@@ -1642,18 +1793,29 @@ function EventGroupDetailView({
                   const index = startIndex + offset;
                   const isSelected = selected.has(item.id);
                   return (
-                    <EventThumbCard
+                    <motion.div
                       key={item.id}
-                      item={item}
-                      muted={showExcluded}
-                      showExcluded={showExcluded}
-                      selected={isSelected}
-                      onToggle={(shiftKey) => toggleSelection(index, shiftKey)}
-                      onOpenPreview={() => onOpenPreview(item)}
-                      onExclude={async () => onExcludeItem(item.id)}
-                      onRestore={async () => onRestoreItem(item.id)}
+                      variants={GRID_ITEM_VARIANTS}
+                      initial="hidden"
+                      animate="show"
+                      transition={{ delay: Math.min(index * 0.05, 0.35), duration: 0.2 }}
+                      layout
                       style={{ flex: "1 1 0", minWidth: 0 }}
-                    />
+                    >
+                      <EventThumbCard
+                        item={item}
+                        muted={showExcluded}
+                        showExcluded={showExcluded}
+                        selected={isSelected}
+                        pulsing={pulseSet.has(item.id)}
+                        moving={movingSet.has(item.id)}
+                        onToggle={(shiftKey) => toggleSelection(index, shiftKey)}
+                        onOpenPreview={() => onOpenPreview(item)}
+                        onExclude={async () => onExcludeItem(item.id)}
+                        onRestore={async () => onRestoreItem(item.id)}
+                        style={{ flex: "1 1 0", minWidth: 0 }}
+                      />
+                    </motion.div>
                   );
                 })}
                 {emptySlotCount > 0
@@ -1665,10 +1827,10 @@ function EventGroupDetailView({
                       />
                     ))
                   : null}
-              </div>
+              </motion.div>
             );
           })}
-          </div>
+          </motion.div>
         </div>
       </div>
     </div>
@@ -1680,6 +1842,8 @@ function EventThumbCard({
   muted,
   showExcluded,
   selected,
+  pulsing,
+  moving,
   onToggle,
   onOpenPreview,
   onExclude,
@@ -1690,6 +1854,8 @@ function EventThumbCard({
   muted: boolean;
   showExcluded: boolean;
   selected: boolean;
+  pulsing: boolean;
+  moving: boolean;
   onToggle: (shiftKey: boolean) => void;
   onOpenPreview: () => void;
   onExclude: () => Promise<void>;
@@ -1718,7 +1884,7 @@ function EventThumbCard({
 
   return (
     <div
-      className={selected ? "eventThumbCard selected" : "eventThumbCard"}
+      className={`${selected ? "eventThumbCard selected" : "eventThumbCard"} ${pulsing ? "eventThumbPulse" : ""} ${moving ? "eventThumbFlyAway" : ""}`}
       data-testid={`event-media-item-${item.id}`}
       data-muted={muted ? "true" : "false"}
       data-thumbnail-card
@@ -1992,21 +2158,28 @@ function ImageReviewView({
                   <button data-testid={`image-keep-all-${groupId}`} className="secondaryBtn" onClick={() => void onKeepAll(groupId)}>Keep All</button>
                 </div>
               </div>
-              <div className="eventGroupsGrid">
-                {groupItems.map((item) => (
-                  <ImageCard
+              <motion.div className="eventGroupsGrid" variants={GRID_CONTAINER_VARIANTS} initial="hidden" animate="show" layout>
+                {groupItems.map((item, index) => (
+                  <motion.div
                     key={item.id}
-                    item={item}
-                    selected={selected.has(item.id)}
-                    thumbnail={thumbs[item.id] || getDateThumbFallbackDataUrl(item.filename)}
-                    onToggle={() => setSelectedIds((prev) => prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id])}
-                    onOpen={() => void openModal(visibleItems.findIndex((entry) => entry.id === item.id))}
-                    onExclude={() => void onExcludeSingle(item.id)}
-                    onRestore={() => void onRestoreSingle(item.id)}
-                    muted={showExcluded}
-                  />
+                    variants={GRID_ITEM_VARIANTS}
+                    layout
+                    transition={{ delay: Math.min(index * 0.05, 0.35), duration: 0.2 }}
+                    style={{ flex: "1 1 0", minWidth: 0 }}
+                  >
+                    <ImageCard
+                      item={item}
+                      selected={selected.has(item.id)}
+                      thumbnail={thumbs[item.id] || getDateThumbFallbackDataUrl(item.filename)}
+                      onToggle={() => setSelectedIds((prev) => prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id])}
+                      onOpen={() => void openModal(visibleItems.findIndex((entry) => entry.id === item.id))}
+                      onExclude={() => void onExcludeSingle(item.id)}
+                      onRestore={() => void onRestoreSingle(item.id)}
+                      muted={showExcluded}
+                    />
+                  </motion.div>
                 ))}
-              </div>
+              </motion.div>
             </div>
           ))}
         </div>
@@ -2017,35 +2190,44 @@ function ImageReviewView({
           data-testid="image-virtual-grid"
           style={{ height: "56vh", overflow: "auto", position: "relative" }}
         >
-          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+          <motion.div layout style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const startIndex = virtualRow.index * columnCount;
               const rowItems = visibleItems.slice(startIndex, startIndex + columnCount);
               return (
                 <div key={virtualRow.key} style={{ position: "absolute", top: virtualRow.start, left: 0, right: 0, display: "flex", gap: "8px", padding: "0 8px" }}>
-                  {rowItems.map((item) => (
-                    <ImageCard
+                  {rowItems.map((item, offset) => (
+                    <motion.div
                       key={item.id}
-                      item={item}
-                      selected={selected.has(item.id)}
-                      thumbnail={thumbs[item.id] || getDateThumbFallbackDataUrl(item.filename)}
-                      onToggle={() => setSelectedIds((prev) => prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id])}
-                      onOpen={() => void openModal(visibleItems.findIndex((entry) => entry.id === item.id))}
-                      onExclude={() => void onExcludeSingle(item.id)}
-                      onRestore={() => void onRestoreSingle(item.id)}
-                      muted={showExcluded}
-                    />
+                      variants={GRID_ITEM_VARIANTS}
+                      initial="hidden"
+                      animate="show"
+                      layout
+                      transition={{ delay: Math.min((startIndex + offset) * 0.05, 0.35), duration: 0.2 }}
+                      style={{ flex: "1 1 0", minWidth: 0 }}
+                    >
+                      <ImageCard
+                        item={item}
+                        selected={selected.has(item.id)}
+                        thumbnail={thumbs[item.id] || getDateThumbFallbackDataUrl(item.filename)}
+                        onToggle={() => setSelectedIds((prev) => prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id])}
+                        onOpen={() => void openModal(visibleItems.findIndex((entry) => entry.id === item.id))}
+                        onExclude={() => void onExcludeSingle(item.id)}
+                        onRestore={() => void onRestoreSingle(item.id)}
+                        muted={showExcluded}
+                      />
+                    </motion.div>
                   ))}
                 </div>
               );
             })}
-          </div>
+          </motion.div>
         </div>
       )}
 
       {!showExcluded ? (
         <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
-          <button
+          <MotionPrimaryButton
             data-testid="image-done-proceed"
             className="primaryBtn"
             onClick={() => {
@@ -2060,7 +2242,7 @@ function ImageReviewView({
             }}
           >
             Done - Proceed to Video Review
-          </button>
+          </MotionPrimaryButton>
         </div>
       ) : null}
 
@@ -2172,8 +2354,14 @@ function ImageCard({
   onRestore: () => void;
   muted: boolean;
 }) {
+  const [removing, setRemoving] = useState(false);
+  async function handleExcludeClick() {
+    setRemoving(true);
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    onExclude();
+  }
   return (
-    <div className={selected ? "mediaTile mediaTileSelected" : "mediaTile"} data-testid={`image-item-${item.id}`} style={{ flex: "1 1 0", minWidth: 0, opacity: muted ? 0.65 : 1 }}>
+    <div className={`${selected ? "mediaTile mediaTileSelected" : "mediaTile"} ${removing ? "itemRemoving" : ""}`} data-testid={`image-item-${item.id}`} style={{ flex: "1 1 0", minWidth: 0, opacity: muted ? 0.65 : 1 }}>
       <button data-testid={`image-open-${item.id}`} className="mediaTileOpen" onClick={onOpen}>
         <img className="mediaTileImage mediaTileImageSquare" src={thumbnail} alt={item.filename} />
       </button>
@@ -2187,7 +2375,7 @@ function ImageCard({
               ↺
             </button>
           ) : (
-            <button data-testid={`image-exclude-${item.id}`} className="mediaTileIconButton mediaTileIconButtonDanger" onClick={onExclude} aria-label="Exclude">
+              <button data-testid={`image-exclude-${item.id}`} className="mediaTileIconButton mediaTileIconButtonDanger" onClick={() => void handleExcludeClick()} aria-label="Exclude">
               <IconXCircle />
             </button>
           )}
@@ -2230,6 +2418,7 @@ function VideoReviewView({
   const [sizeThresholdMb, setSizeThresholdMb] = useState(5);
   const [durationThresholdSecs, setDurationThresholdSecs] = useState(10);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [removingIds, setRemovingIds] = useState<number[]>([]);
   const [thumbs, setThumbs] = useState<Record<number, string>>({});
   const [previewById, setPreviewById] = useState<Record<number, string>>({});
   const [inlinePlayingId, setInlinePlayingId] = useState<number | null>(null);
@@ -2364,6 +2553,13 @@ function VideoReviewView({
     }
   }
 
+  async function animateAndExclude(id: number) {
+    setRemovingIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    await handleExclude([id]);
+    setRemovingIds((prev) => prev.filter((entry) => entry !== id));
+  }
+
   return (
     <div data-testid="video-review-view">
       <ReviewToolbar
@@ -2451,7 +2647,7 @@ function VideoReviewView({
           data-testid="video-virtual-grid"
           style={{ height: `${scrollHeight}px`, overflow: "auto", position: "relative" }}
         >
-          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+          <motion.div layout style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const startIndex = virtualRow.index * columnCount;
               const rowItems = filtered.slice(startIndex, startIndex + columnCount);
@@ -2469,11 +2665,16 @@ function VideoReviewView({
                     const previewSrc = previewById[item.id] ?? "";
                     const thumbSrc = thumbs[item.id] || getDateThumbFallbackDataUrl(item.filename);
                     return (
-                      <div
+                      <motion.div
                         key={item.id}
-                        className={isSelected ? "mediaTile mediaTileVideo mediaTileSelected" : "mediaTile mediaTileVideo"}
+                        className={`${isSelected ? "mediaTile mediaTileVideo mediaTileSelected" : "mediaTile mediaTileVideo"} ${removingIds.includes(item.id) ? "itemRemoving" : ""}`}
                         data-testid={`video-item-${item.id}`}
                         data-flagged={flagged ? "true" : "false"}
+                        variants={GRID_ITEM_VARIANTS}
+                        initial="hidden"
+                        animate="show"
+                        layout
+                        transition={{ delay: Math.min((startIndex + offset) * 0.05, 0.35), duration: 0.2 }}
                         style={{ flex: "1 1 0", minWidth: 0, position: "relative" }}
                       >
                         {inlinePlayingId === item.id && previewSrc ? (
@@ -2497,7 +2698,7 @@ function VideoReviewView({
                             {showExcluded ? (
                               <button data-testid={`video-restore-${item.id}`} className="mediaTileIconButton" onClick={() => void handleRestore([item.id])} aria-label="Restore">↺</button>
                             ) : (
-                              <button data-testid={`video-exclude-${item.id}`} className="mediaTileIconButton mediaTileIconButtonDanger" onClick={() => void handleExclude([item.id])} aria-label="Exclude">
+                              <button data-testid={`video-exclude-${item.id}`} className="mediaTileIconButton mediaTileIconButtonDanger" onClick={() => void animateAndExclude(item.id)} aria-label="Exclude">
                                 <IconXCircle />
                               </button>
                             )}
@@ -2512,14 +2713,14 @@ function VideoReviewView({
                         {inlinePlayingId !== item.id ? (
                           <span className="mediaTilePlayGlyphStatic">▶</span>
                         ) : null}
-                      </div>
+                      </motion.div>
                     );
                   })}
                   {emptySlotCount > 0 ? Array.from({ length: emptySlotCount }).map((_, index) => <div key={`v-empty-${virtualRow.index}-${index}`} style={{ flex: "1 1 0", minWidth: 0 }} />) : null}
                 </div>
               );
             })}
-          </div>
+          </motion.div>
         </div>
       </div>
 
@@ -2543,7 +2744,7 @@ function VideoReviewView({
 
       {!showExcluded ? (
         <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
-          <button
+          <MotionPrimaryButton
             data-testid="video-done-proceed"
             className="primaryBtn"
             onClick={() => {
@@ -2554,7 +2755,7 @@ function VideoReviewView({
             }}
           >
             Done - Proceed to Date Enforcement
-          </button>
+          </MotionPrimaryButton>
         </div>
       ) : null}
 
@@ -2627,11 +2828,7 @@ function IconXCircle() {
 function EmptyStateBanner() {
   return (
     <div className="emptyStateSurface" data-testid="empty-state-banner">
-      <span className="appLogo emptyStateFlower" aria-hidden="true">
-        <span className="appLogoPetal appLogoPetalBlue" />
-        <span className="appLogoPetal appLogoPetalOrange" />
-        <span className="appLogoPetal appLogoPetalPurple" />
-      </span>
+      <img src={logoImage} alt="" aria-hidden="true" className="emptyStateFlower" />
       <div className="emptyStateMessage">All caught up! Your library is looking great.</div>
     </div>
   );
