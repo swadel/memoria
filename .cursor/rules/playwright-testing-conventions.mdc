@@ -1,0 +1,14 @@
+---
+description: Playwright UI testing conventions for Memoria
+globs: tests/ui/**/*.ts
+alwaysApply: false
+---
+
+# Playwright Testing Conventions
+
+- Use stable selectors (`data-testid`) over brittle text-only locators when possible.
+- Prefer deterministic seeded fixtures for assertions; avoid coupling tests to external AI/network behavior.
+- Keep tests scenario-focused: one flow per test with clear arrange/act/assert structure.
+- Assert visible user outcomes (counts, messages, rendered cards, dialog states), not internals.
+- Capture and preserve failure diagnostics via traces/screenshots/videos.
+- Avoid implicit sleeps; wait on explicit UI states or network/command completion signals.

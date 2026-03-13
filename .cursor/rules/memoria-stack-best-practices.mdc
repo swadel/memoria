@@ -1,0 +1,40 @@
+---
+description: Memoria stack best practices (Tauri, React, Rust, Playwright)
+alwaysApply: true
+---
+
+# Memoria Engineering Standards
+
+- Prefer deterministic behavior over implicit magic; avoid hidden side effects in UI and command handlers.
+- Keep user-visible operations non-destructive by default and preserve auditability when state changes.
+
+## React + TypeScript (`src/**`)
+
+- Use strict typing end-to-end; avoid `any` and keep DTO keys aligned with backend camelCase contracts.
+- Add stable `data-testid` attributes for interactive UI controls and stateful cards used in E2E tests.
+- Use accessible labels (`label` + `htmlFor`) for all form inputs; do not rely only on placeholders.
+- Guard async UI actions with clear status messaging and disable controls while busy.
+
+## Tauri + Rust (`src-tauri/**`)
+
+- Keep command handlers thin; move business logic into `services/*`.
+- For schema changes, always implement safe migrations for existing DBs (add columns/indexes idempotently).
+- Return structured errors/messages suitable for frontend display; avoid panics in runtime command paths.
+- Preserve local/offline fallbacks for AI-dependent flows so core pipeline remains testable.
+
+## SQLite + Fixtures
+
+- Ensure fixture seeding creates both DB rows and real media files when UI paths depend on file rendering.
+- Keep fixture profiles explicit (`review-duplicates`, `date-approval`, etc.) and deterministic across runs.
+
+## Playwright UI Testing (`tests/ui/**`)
+
+- Cover critical flows by UI behavior: dashboard pipeline, review actions, duplicate/lightbox flow, date approval, event groups, settings.
+- Prefer deterministic seeded fixtures for assertions; use full pipeline only for limited smoke scenarios.
+- For desktop tests, isolate app state using test-specific app directories and explicit environment configuration.
+- Treat flaky/implicit waits as bugs; assert on stable selectors and explicit state transitions.
+
+## CI Quality Gates
+
+- Required checks should include lint/typecheck, Rust tests, browser UI tests, and desktop UI tests.
+- Always upload Playwright artifacts (trace/screenshots/videos) on failure for diagnosis.

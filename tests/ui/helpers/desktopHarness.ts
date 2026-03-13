@@ -10,6 +10,7 @@ const DEFAULT_CDP_PORT = 9333;
 export class DesktopHarness {
   private appProcess: ChildProcessWithoutNullStreams | null = null;
   private browser: Browser | null = null;
+  private appLogs = "";
   readonly appDir: string;
   readonly mediaRoot: string;
   readonly outputRoot: string;
@@ -24,9 +25,7 @@ export class DesktopHarness {
   }
 
   seedFixture(profile: string) {
-    const cargo = process.env.CARGO_BIN ?? (process.platform === "win32"
-      ? `${process.env.USERPROFILE}\\.cargo\\bin\\cargo.exe`
-      : "cargo");
+    const cargo = resolveCargoBinary();
     const result = spawnSync(
       cargo,
       [
@@ -43,10 +42,10 @@ export class DesktopHarness {
       ],
       {
         cwd: process.cwd(),
-        env: {
+        env: withCargoInPath({
           ...process.env,
           MEMORIA_APP_DIR: this.appDir
-        },
+        }),
         shell: process.platform === "win32",
         stdio: "pipe",
         encoding: "utf-8"
@@ -58,16 +57,24 @@ export class DesktopHarness {
   }
 
   async launch(): Promise<Page> {
-    this.appProcess = spawn("npm", ["run", "tauri", "dev"], {
+    const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
+    this.appProcess = spawn(npmBin, ["run", "tauri", "dev"], {
       cwd: process.cwd(),
       shell: true,
-      env: {
+      env: withCargoInPath({
         ...process.env,
         MEMORIA_APP_DIR: this.appDir,
         VITE_E2E_DISABLE_POLLING: "1",
         WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${this.cdpPort}`
-      },
+      }),
       stdio: "pipe"
+    });
+    this.appLogs = "";
+    this.appProcess.stdout.on("data", (chunk) => {
+      this.appLogs += chunk.toString();
+    });
+    this.appProcess.stderr.on("data", (chunk) => {
+      this.appLogs += chunk.toString();
     });
 
     await this.waitForCdp();
@@ -108,6 +115,39 @@ export class DesktopHarness {
       }
       await sleep(250);
     }
-    throw new Error("Timed out waiting for WebView2 CDP endpoint.");
+    throw new Error(`Timed out waiting for WebView2 CDP endpoint.\n${this.appLogs.slice(-4000)}`);
   }
+}
+
+function resolveCargoBinary(): string {
+  if (process.env.CARGO_BIN) {
+    return process.env.CARGO_BIN;
+  }
+  if (process.platform === "win32") {
+    const userProfile = process.env.USERPROFILE;
+    if (userProfile) {
+      return `${userProfile}\\.cargo\\bin\\cargo.exe`;
+    }
+  }
+  return "cargo";
+}
+
+function withCargoInPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") {
+    return env;
+  }
+  const userProfile = env.USERPROFILE ?? process.env.USERPROFILE;
+  const cargoBin = userProfile ? `${userProfile}\\.cargo\\bin` : null;
+  if (!cargoBin) {
+    return env;
+  }
+  const pathKey = "Path" in env ? "Path" : "PATH";
+  const currentPath = env[pathKey] ?? "";
+  if (currentPath.toLowerCase().includes(cargoBin.toLowerCase())) {
+    return env;
+  }
+  return {
+    ...env,
+    [pathKey]: `${cargoBin};${currentPath}`
+  };
 }

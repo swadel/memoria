@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { DesktopHarness } from "../helpers/desktopHarness";
 
 test.describe.configure({ mode: "serial" });
@@ -16,13 +16,7 @@ test.describe("Memoria desktop UI", () => {
   });
 
   test("renders seeded dashboard/review/groups and opens thumbnail lightbox", async () => {
-    let page: Page;
-    try {
-      page = await harness.launch();
-    } catch (err) {
-      test.skip(`Desktop CDP unavailable on this runner: ${String(err)}`);
-      return;
-    }
+    const page = await harness.launch();
 
     await expect(page.getByTestId("stat-review")).not.toContainText("0");
     await expect(page.getByTestId("stat-grouped")).not.toContainText("0");

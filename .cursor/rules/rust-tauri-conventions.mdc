@@ -1,0 +1,14 @@
+---
+description: Rust and Tauri backend conventions for Memoria
+globs: src-tauri/**/*.rs
+alwaysApply: false
+---
+
+# Rust + Tauri Conventions
+
+- Keep Tauri command functions small and delegate business logic to `services/*`.
+- Use `Result<_, String>` at command boundaries with actionable user-facing error text.
+- Never introduce non-idempotent DB migrations; schema/index updates must be safe on existing DBs.
+- Avoid panics in runtime paths; prefer error propagation and explicit handling.
+- Preserve deterministic behavior for tests (stable fixture setup, no hidden randomness in core flows).
+- For file operations, avoid destructive behavior unless explicitly requested by user action.
