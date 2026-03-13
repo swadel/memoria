@@ -1,9 +1,7 @@
 pub mod ai_client;
-pub mod classifier;
 pub mod date_enforcer;
 pub mod event_grouper;
 pub mod exiftool;
 pub mod file_organizer;
-pub mod review_rules;
 pub mod settings;
 pub mod test_fixtures;

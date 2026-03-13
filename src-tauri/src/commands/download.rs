@@ -58,14 +58,14 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
         tokio::fs::copy(source_path, &staged_path).await?;
         let file_size = tokio::fs::metadata(&staged_path).await?.len() as i64;
         conn.execute(
-            "INSERT OR IGNORE INTO media_items(icloud_id, filename, status, classification, current_path, original_path, file_size, mime_type)
-             VALUES(?1, ?2, 'downloading', NULL, '', '', ?3, ?4)",
+            "INSERT OR IGNORE INTO media_items(icloud_id, filename, status, current_path, original_path, file_size, mime_type)
+             VALUES(?1, ?2, 'downloading', '', '', ?3, ?4)",
             params![icloud_id, filename, file_size, guess_mime(source_path)],
         )?;
         let meta = exiftool::read_metadata(staged_path.as_path()).await.unwrap_or_default();
         conn.execute(
             "UPDATE media_items
-             SET current_path=?1, original_path=?2, status='downloaded', width=?3, height=?4, mime_type=COALESCE(?5, mime_type), date_taken=?6, duration_secs=?7, content_identifier=?8, date_taken_source='exif', updated_at=CURRENT_TIMESTAMP
+             SET current_path=?1, original_path=?2, status='metadata_extracted', width=?3, height=?4, mime_type=COALESCE(?5, mime_type), date_taken=?6, duration_secs=?7, content_identifier=?8, date_taken_source='exif', updated_at=CURRENT_TIMESTAMP
              WHERE icloud_id=?9",
             params![
                 staged_path.to_string_lossy().to_string(),

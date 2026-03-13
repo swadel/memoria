@@ -7,34 +7,21 @@ test.describe("Memoria browser UI smoke", () => {
     await page.goto("/");
   });
 
-  test("renders dashboard and pipeline actions", async ({ page }) => {
+  test("renders dashboard and updated pipeline phases", async ({ page }) => {
     await expect(page.getByTestId("layout-root")).toBeVisible();
     await expect(page.getByTestId("stat-total")).toContainText("8");
     await expect(page.getByTestId("pipeline-index")).toBeVisible();
-    await expect(page.getByTestId("pipeline-classify")).toBeVisible();
+    await expect(page.getByTestId("pipeline-date-enforcement")).toBeVisible();
     await expect(page.getByTestId("pipeline-group")).toBeVisible();
     await expect(page.getByTestId("pipeline-finalize")).toBeVisible();
   });
 
-  test("supports review queue filtering and actions", async ({ page }) => {
-    await page.getByTestId("tab-review").click();
-    await expect(page.getByTestId("review-card")).toBeVisible();
-    await page.getByTestId("review-reason-filter").selectOption("screenshot");
-    await expect(page.getByTestId("review-item-101")).toBeVisible();
-
-    await page.getByTestId("review-select-101").check();
-    await page.getByTestId("review-include").click();
-    await expect(page.getByTestId("status-pill")).toContainText("Applied 'include'");
-  });
-
-  test("opens lightbox and navigates duplicate cluster", async ({ page }) => {
-    await page.getByTestId("tab-review").click();
-    await page.getByTestId("review-thumb-201").click();
-    await expect(page.getByTestId("lightbox-dialog")).toBeVisible();
-    await page.getByTestId("lightbox-next").click();
-    await page.getByTestId("lightbox-prev").click();
-    await page.getByTestId("lightbox-close").click();
-    await expect(page.getByTestId("lightbox-dialog")).toBeHidden();
+  test("removes orphaned dashboard controls and review queue UI", async ({ page }) => {
+    await expect(page.getByTestId("tab-review")).toHaveCount(0);
+    await expect(page.getByTestId("pipeline-classify")).toHaveCount(0);
+    await expect(page.getByTestId("dashboard-working-directory")).toHaveCount(0);
+    await expect(page.getByTestId("dashboard-output-directory")).toHaveCount(0);
+    await expect(page.getByTestId("pipeline-progress-track")).toHaveCount(0);
   });
 
   test("handles date approval and event renaming", async ({ page }) => {
@@ -69,7 +56,7 @@ test.describe("Memoria browser UI smoke", () => {
     await page.getByTestId("reset-session-keep-files").click();
 
     await expect(page.getByTestId("stat-total")).toContainText("0");
-    await expect(page.getByTestId("stat-review")).toContainText("0");
+    await expect(page.getByTestId("stat-indexed")).toContainText("0");
     await expect(page.getByTestId("status-pill")).toContainText("Configuration was preserved");
 
     await page.getByTestId("tab-settings").click();
@@ -81,7 +68,7 @@ test.describe("Memoria browser UI smoke", () => {
     await page.getByTestId("pipeline-reset-session").click();
     await expect(page.getByTestId("reset-session-dialog")).toBeVisible();
     await page.getByTestId("reset-session-delete-files").click();
-    await expect(page.getByTestId("status-pill")).toContainText("Removed 4 generated directories");
+    await expect(page.getByTestId("status-pill")).toContainText("Removed 3 generated directories");
     await expect(page.getByTestId("stat-total")).toContainText("0");
   });
 });

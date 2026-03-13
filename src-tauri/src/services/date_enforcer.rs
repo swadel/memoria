@@ -12,7 +12,9 @@ fn is_invalid_date(value: &str) -> bool {
 pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT id, filename, COALESCE(current_path, ''), date_taken
-         FROM media_items WHERE classification='legitimate'",
+         FROM media_items
+         WHERE status IN ('downloaded', 'metadata_extracted', 'date_review_pending', 'date_verified')
+           AND COALESCE(current_path, '') != ''",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((
@@ -43,7 +45,7 @@ pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
             .to_string();
             conn.execute(
                 "UPDATE media_items
-                 SET date_needs_review=1, ai_classification_raw=?1, status='classified', updated_at=CURRENT_TIMESTAMP
+                 SET date_needs_review=1, ai_date_estimate_raw=?1, status='date_review_pending', updated_at=CURRENT_TIMESTAMP
                  WHERE id=?2",
                 params![raw, id],
             )?;
@@ -96,4 +98,61 @@ fn normalize_exif_date(value: &str) -> String {
     }
     let year = Utc::now().year();
     format!("{year}-01-01")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::evaluate;
+    use crate::db::init_db;
+    use crate::services::ai_client::{AiClient, AiRoutingConfig};
+    use rusqlite::params;
+    use std::fs;
+
+    fn temp_db_path() -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("memoria-date-enforcer-test-{}.db", rand::random::<u64>()));
+        p
+    }
+
+    #[tokio::test]
+    async fn evaluate_marks_missing_dates_for_review_and_verifies_valid_dates() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, date_taken)
+             VALUES(?1, ?2, ?3, 'metadata_extracted', ?4)",
+            params!["ok-1", "IMG_OK.JPG", "C:\\tmp\\IMG_OK.JPG", "2026-03-12"],
+        )
+        .expect("insert valid date item");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, date_taken)
+             VALUES(?1, ?2, ?3, 'metadata_extracted', NULL)",
+            params!["miss-1", "IMG_MISSING.JPG", "C:\\tmp\\IMG_MISSING.JPG"],
+        )
+        .expect("insert missing date item");
+
+        let ai = AiClient::new(None, None, AiRoutingConfig::default());
+        evaluate(&conn, &ai).await.expect("evaluate");
+
+        let valid_status: String = conn
+            .query_row("SELECT status FROM media_items WHERE icloud_id='ok-1'", [], |r| r.get(0))
+            .expect("valid status");
+        let missing_status: String = conn
+            .query_row("SELECT status FROM media_items WHERE icloud_id='miss-1'", [], |r| r.get(0))
+            .expect("missing status");
+        let missing_flag: i64 = conn
+            .query_row(
+                "SELECT date_needs_review FROM media_items WHERE icloud_id='miss-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("missing flag");
+        assert_eq!(valid_status, "date_verified");
+        assert_eq!(missing_status, "date_review_pending");
+        assert_eq!(missing_flag, 1);
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
 }

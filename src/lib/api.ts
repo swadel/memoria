@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DashboardStats, DateEstimate, EventGroup, MediaItem } from "../types";
+import type { DashboardStats, DateEstimate, EventGroup } from "../types";
 
 declare global {
   interface Window {
@@ -25,10 +25,8 @@ export interface AppConfiguration {
   workingDirectory: string;
   outputDirectory: string;
   aiTaskModels: {
-    classification: { provider: string; model: string };
     dateEstimation: { provider: string; model: string };
     eventNaming: { provider: string; model: string };
-    duplicateRanking: { provider: string; model: string };
   };
 }
 
@@ -69,7 +67,7 @@ export function setAnthropicKey(apiKey: string) {
 }
 
 export function setAiTaskModel(
-  task: "classification" | "dateEstimation" | "eventNaming" | "duplicateRanking",
+  task: "dateEstimation" | "eventNaming",
   provider: "openai" | "anthropic",
   model: string
 ) {
@@ -86,30 +84,6 @@ export function getToolHealth() {
 
 export function getDashboardStats() {
   return invokeCommand<DashboardStats>("get_dashboard_stats");
-}
-
-export function runClassification() {
-  return invokeCommand<void>("run_classification");
-}
-
-export function getReviewQueue() {
-  return invokeCommand<MediaItem[]>("get_review_queue");
-}
-
-export function getMediaPreview(mediaItemId: number) {
-  return invokeCommand<string | null>("get_media_preview", { mediaItemId });
-}
-
-export function getMediaFullResolution(mediaItemId: number) {
-  return invokeCommand<string | null>("get_media_full_resolution", { mediaItemId });
-}
-
-export function applyReviewAction(ids: number[], action: "include" | "delete") {
-  return invokeCommand<void>("apply_review_action", { ids, action });
-}
-
-export function confirmDuplicateKeep(mediaItemId: number) {
-  return invokeCommand<void>("confirm_duplicate_keep", { mediaItemId });
 }
 
 export function getDateReviewQueue() {

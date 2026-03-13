@@ -3,7 +3,7 @@ export type ProcessingStatus =
   | "downloading"
   | "downloaded"
   | "metadata_extracted"
-  | "classified"
+  | "date_review_pending"
   | "date_verified"
   | "grouped"
   | "filed"
@@ -12,27 +12,12 @@ export type ProcessingStatus =
 export interface DashboardStats {
   total: number;
   downloading: number;
-  review: number;
-  legitimate: number;
+  indexed: number;
   dateNeedsReview: number;
+  dateVerified: number;
   grouped: number;
   filed: number;
   errors: number;
-}
-
-export interface MediaItem {
-  id: number;
-  filename: string;
-  currentPath: string;
-  classification: "legitimate" | "review" | "deleted" | null;
-  reviewReason: string | null;
-  reviewReasonDetails: string | null;
-  duplicateClusterId: string | null;
-  status: ProcessingStatus;
-  dateTaken: string | null;
-  dateNeedsReview: boolean;
-  aiConfidence: number | null;
-  eventGroupId: number | null;
 }
 
 export interface EventGroup {

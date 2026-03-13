@@ -4,7 +4,7 @@
 
 > Intelligently organize your iCloud photo library into a structured, event-based archive.
 
-Memoria is a Windows-first desktop application that downloads photos and videos from iCloud, classifies them using AI, enforces date metadata, and organizes them into meaningful event folders — all with you in control of every decision.
+Memoria is a Windows-first desktop application that downloads photos and videos from iCloud, enforces date metadata, and organizes them into meaningful event folders — all with you in control of every decision.
 
 ---
 
@@ -25,7 +25,6 @@ The folder structure Memoria produces looks like this:
   2026/
     2026 - New Years/
     2026 - Misc/
-/review/        ← screenshots, GIFs, and ambiguous items awaiting your decision
 /recycle/       ← items you've marked for deletion (soft delete, never permanent)
 ```
 
@@ -39,21 +38,6 @@ The folder structure Memoria produces looks like this:
 - Downloads original full-resolution files (not compressed versions)
 - Resumable downloads — if the app closes mid-batch, it picks up where it left off
 - Works without iCloud for Windows installed; communicates directly with Apple's web APIs
-
-### Smart Media Classification
-Memoria separates the photos you care about from the noise:
-
-- **Legitimate media** (family photos, travel, events, pets) flows through the main pipeline
-- **Review-queue items** (screenshots, GIFs, memes, screen recordings) are staged for your review before anything happens to them
-
-Classification uses a combination of rule-based filters (file size, dimensions, EXIF flags) and AI vision analysis via the OpenAI API. You can tune the rules and confidence thresholds in Settings.
-
-### Review Queue
-Every item flagged for review is presented in a clean interface before any action is taken. You decide:
-- **Include** — treat it as a legitimate photo and route it through the main pipeline
-- **Delete** — move it to the recycle folder (soft delete; nothing is permanently removed)
-
-Keyboard shortcuts (I / D / arrow keys) make triage fast. Batch approval is supported for high-confidence AI classifications.
 
 ### Date Metadata Enforcement
 Amazon Photos, Google Photos, and most photo management tools order images by the `DateTimeOriginal` EXIF field. If that field is missing, your photos end up out of order or dumped into an "unknown date" bucket.
@@ -104,7 +88,7 @@ Memoria never permanently deletes anything without your explicit action:
 
 - **OS**: Windows 11 (macOS support is a planned future milestone)
 - **iCloud account**: Standard iCloud account required. **Advanced Data Protection (ADP) must be disabled** — ADP encrypts your library end-to-end in a way that prevents web-based access, which is how Memoria connects to iCloud.
-- **OpenAI API key**: Required for AI classification, date estimation, and event naming. You bring your own key. Estimated cost: $0.01–$0.03 per image for classification. Processing 1,000 photos typically costs $10–$30 depending on how many items need AI analysis.
+- **OpenAI API key**: Required for AI date estimation and event naming.
 - **Storage**: Enough local disk space for your downloaded originals plus organized copies during processing.
 - **Tools**: Node.js 20+, Rust stable, Python 3.11+, and [Tauri prerequisites](https://tauri.app/v2/guides/getting-started/prerequisites/)
 
@@ -138,19 +122,17 @@ npm run tauri dev
 ## Pipeline Overview
 
 ```
-iCloud  →  /staging/  →  classify  →  /review/ (screenshots, GIFs)
-                                   →  date check  →  AI estimate + approval
-                                                  →  event grouping + AI naming
-                                                  →  /organized/<year>/<year - event>/
+iCloud  →  /staging/  →  metadata extraction + date validation
+                        →  date approval (if needed)
+                        →  event grouping + AI naming
+                        →  /organized/<year>/<year - event>/
 ```
 
 1. **Download** originals from iCloud into `/staging/`
 2. **Extract metadata** via exiftool (EXIF, file type, dimensions)
-3. **Classify** media as `legitimate` or `review` using rules + AI vision
-4. **Review queue** — you include or soft-delete flagged items
-5. **Date enforcement** — missing dates estimated by AI, approved by you, written to EXIF
-6. **Event grouping** — temporal clustering, holiday matching, AI-suggested folder names, your approval
-7. **File organization** — moved to `organized/<year>/<year - event>/`, logged to audit trail
+3. **Date enforcement** — missing dates estimated by AI, approved by you, written to EXIF
+4. **Event grouping** — temporal clustering, holiday matching, AI-suggested folder names, your approval
+5. **File organization** — moved to `organized/<year>/<year - event>/`, logged to audit trail
 
 ---
 
@@ -174,7 +156,6 @@ All settings are managed through the in-app Settings panel. Nothing requires man
 |---|---|---|
 | Output directory | `~/Pictures/Memoria` | Where organized folders are created |
 | Download concurrency | 3 | Parallel iCloud downloads |
-| Classification confidence threshold | 90% | Items below this go to review queue |
 | AI cost cap | $20.00 | Processing pauses if this amount is reached |
 | Grouping time window | 3 days | Max gap between photos in the same event cluster |
 | HEIC handling | Keep originals | Whether to convert HEIC to JPEG on download |
@@ -204,13 +185,12 @@ memoria/
   src-tauri/              # Rust backend
     src/
       commands/           # Tauri IPC command handlers
-      services/           # Business logic (download, classify, organize)
+      services/           # Business logic (download, date, organize)
       db/                 # SQLite schema, migrations, queries
       models/             # Shared data structures
   src/                    # React frontend
     components/
       dashboard/          # Processing status overview
-      review-queue/       # Media triage interface
       date-approval/      # Date estimation approval
       event-review/       # Event grouping review
       settings/           # App configuration

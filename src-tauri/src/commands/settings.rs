@@ -15,10 +15,8 @@ pub struct TaskModelSelection {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AiTaskModels {
-    pub classification: TaskModelSelection,
     pub date_estimation: TaskModelSelection,
     pub event_naming: TaskModelSelection,
-    pub duplicate_ranking: TaskModelSelection,
 }
 
 #[derive(Serialize)]
@@ -49,11 +47,6 @@ pub struct ToolHealth {
 pub async fn initialize_app(state: State<'_, AppState>) -> Result<(), String> {
     let conn = state.open_conn().map_err(|e| e.to_string())?;
     db::set_setting(&conn, "grouping_threshold_days", "3").map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "classification_confidence_threshold", "0.9").map_err(|e| e.to_string())?;
-    if db::get_setting(&conn, "ai_model_classification").map_err(|e| e.to_string())?.is_none() {
-        db::set_setting(&conn, "ai_model_classification_provider", "openai").map_err(|e| e.to_string())?;
-        db::set_setting(&conn, "ai_model_classification", "gpt-4o-mini").map_err(|e| e.to_string())?;
-    }
     if db::get_setting(&conn, "ai_model_date_estimation").map_err(|e| e.to_string())?.is_none() {
         db::set_setting(&conn, "ai_model_date_estimation_provider", "anthropic").map_err(|e| e.to_string())?;
         db::set_setting(&conn, "ai_model_date_estimation", "claude-sonnet-4-6").map_err(|e| e.to_string())?;
@@ -62,11 +55,6 @@ pub async fn initialize_app(state: State<'_, AppState>) -> Result<(), String> {
         db::set_setting(&conn, "ai_model_event_naming_provider", "anthropic").map_err(|e| e.to_string())?;
         db::set_setting(&conn, "ai_model_event_naming", "claude-sonnet-4-6").map_err(|e| e.to_string())?;
     }
-    if db::get_setting(&conn, "ai_model_duplicate_ranking").map_err(|e| e.to_string())?.is_none() {
-        db::set_setting(&conn, "ai_model_duplicate_ranking_provider", "anthropic").map_err(|e| e.to_string())?;
-        db::set_setting(&conn, "ai_model_duplicate_ranking", "claude-sonnet-4-6").map_err(|e| e.to_string())?;
-    }
-
     let output = db::get_setting(&conn, "output_directory")
         .map_err(|e| e.to_string())?
         .filter(|v| !v.trim().is_empty())
@@ -89,15 +77,6 @@ pub fn get_app_configuration(state: State<'_, AppState>) -> Result<AppConfigurat
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| "C:\\Memoria".to_string());
     let ai_task_models = AiTaskModels {
-        classification: read_task_model(
-            &conn,
-            "ai_model_classification_provider",
-            "ai_model_classification",
-            TaskModelSelection {
-                provider: "openai".to_string(),
-                model: "gpt-4o-mini".to_string(),
-            },
-        )?,
         date_estimation: read_task_model(
             &conn,
             "ai_model_date_estimation_provider",
@@ -111,15 +90,6 @@ pub fn get_app_configuration(state: State<'_, AppState>) -> Result<AppConfigurat
             &conn,
             "ai_model_event_naming_provider",
             "ai_model_event_naming",
-            TaskModelSelection {
-                provider: "anthropic".to_string(),
-                model: "claude-sonnet-4-6".to_string(),
-            },
-        )?,
-        duplicate_ranking: read_task_model(
-            &conn,
-            "ai_model_duplicate_ranking_provider",
-            "ai_model_duplicate_ranking",
             TaskModelSelection {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet-4-6".to_string(),
@@ -213,11 +183,9 @@ pub async fn set_ai_task_model(
         return Err("Provider must be 'openai' or 'anthropic'.".to_string());
     }
     let (provider_key, model_key) = match task.as_str() {
-        "classification" => ("ai_model_classification_provider", "ai_model_classification"),
         "dateEstimation" => ("ai_model_date_estimation_provider", "ai_model_date_estimation"),
         "eventNaming" => ("ai_model_event_naming_provider", "ai_model_event_naming"),
-        "duplicateRanking" => ("ai_model_duplicate_ranking_provider", "ai_model_duplicate_ranking"),
-        _ => return Err("Unknown AI task. Expected classification/dateEstimation/eventNaming/duplicateRanking.".to_string()),
+        _ => return Err("Unknown AI task. Expected dateEstimation/eventNaming.".to_string()),
     };
     let conn = state.open_conn().map_err(|e| e.to_string())?;
     db::set_setting(&conn, provider_key, &provider).map_err(|e| e.to_string())?;
@@ -259,7 +227,7 @@ fn clear_pipeline_state(conn: &rusqlite::Connection) -> AnyResult<()> {
 
 async fn remove_generated_directories(output_root: &Path) -> AnyResult<Vec<String>> {
     let mut removed = Vec::new();
-    for dir in ["staging", "review", "organized", "recycle"] {
+    for dir in ["staging", "organized", "recycle"] {
         let path = output_root.join(dir);
         if path.exists() {
             tokio::fs::remove_dir_all(&path).await?;
@@ -306,8 +274,8 @@ mod tests {
         settings::set_secret_with_fallback(&conn, "anthropic_api_key", "ak-test").expect("set anthropic key");
         db::set_setting(&conn, "working_directory", r"C:\Photos\Inbox").expect("set working");
         db::set_setting(&conn, "output_directory", r"C:\Memoria\Output").expect("set output");
-        db::set_setting(&conn, "ai_model_classification_provider", "openai").expect("set provider");
-        db::set_setting(&conn, "ai_model_classification", "gpt-4o-mini").expect("set model");
+        db::set_setting(&conn, "ai_model_date_estimation_provider", "anthropic").expect("set provider");
+        db::set_setting(&conn, "ai_model_date_estimation", "claude-sonnet-4-6").expect("set model");
 
         assert_eq!(
             settings::get_secret_with_fallback(&conn, "openai_api_key")
@@ -334,10 +302,10 @@ mod tests {
             Some("ak-test")
         );
         assert_eq!(
-            db::get_setting(&conn, "ai_model_classification")
+            db::get_setting(&conn, "ai_model_date_estimation")
                 .expect("get ai model")
                 .as_deref(),
-            Some("gpt-4o-mini")
+            Some("claude-sonnet-4-6")
         );
 
         drop(conn);
@@ -403,20 +371,17 @@ mod tests {
         let root = std::env::temp_dir().join(format!("memoria-reset-test-{}", rand::random::<u64>()));
         let keep_dir = root.join("keep");
         let staging = root.join("staging");
-        let review = root.join("review");
         let organized = root.join("organized");
         let recycle = root.join("recycle");
         fs::create_dir_all(&keep_dir).expect("create keep");
         fs::create_dir_all(&staging).expect("create staging");
-        fs::create_dir_all(&review).expect("create review");
         fs::create_dir_all(&organized).expect("create organized");
         fs::create_dir_all(&recycle).expect("create recycle");
         fs::write(keep_dir.join("safe.txt"), b"keep").expect("write keep marker");
 
         let removed = remove_generated_directories(&root).await.expect("remove generated");
-        assert_eq!(removed.len(), 4);
+        assert_eq!(removed.len(), 3);
         assert!(!staging.exists());
-        assert!(!review.exists());
         assert!(!organized.exists());
         assert!(!recycle.exists());
         assert!(keep_dir.exists());

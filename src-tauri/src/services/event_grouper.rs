@@ -7,12 +7,12 @@ use super::ai_client::AiClient;
 
 pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
     conn.execute("DELETE FROM event_groups", [])?;
-    conn.execute("UPDATE media_items SET event_group_id=NULL WHERE classification='legitimate'", [])?;
+    conn.execute("UPDATE media_items SET event_group_id=NULL WHERE status='date_verified'", [])?;
 
     let mut stmt = conn.prepare(
         "SELECT id, COALESCE(date_taken, ''), filename, COALESCE(current_path, '')
          FROM media_items
-         WHERE classification='legitimate' AND (date_needs_review=0 OR date_needs_review IS NULL)",
+         WHERE status='date_verified' AND (date_needs_review=0 OR date_needs_review IS NULL)",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((

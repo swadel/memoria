@@ -44,12 +44,6 @@ impl AppState {
                     .ok()
                     .flatten();
                 let mut routing = AiRoutingConfig::default();
-                routing.classification = task_model_from_settings(
-                    &conn,
-                    "ai_model_classification_provider",
-                    "ai_model_classification",
-                    routing.classification.clone(),
-                );
                 routing.date_estimation = task_model_from_settings(
                     &conn,
                     "ai_model_date_estimation_provider",
@@ -61,12 +55,6 @@ impl AppState {
                     "ai_model_event_naming_provider",
                     "ai_model_event_naming",
                     routing.event_naming.clone(),
-                );
-                routing.duplicate_ranking = task_model_from_settings(
-                    &conn,
-                    "ai_model_duplicate_ranking_provider",
-                    "ai_model_duplicate_ranking",
-                    routing.duplicate_ranking.clone(),
                 );
                 (openai, anthropic, routing)
             }
@@ -145,14 +133,8 @@ pub fn run() {
             commands::settings::reset_session,
             commands::download::start_download_session,
             commands::metadata::get_dashboard_stats,
-            commands::classify::run_classification,
-            commands::classify::get_review_queue,
-            commands::classify::get_media_preview,
-            commands::classify::get_media_full_resolution,
-            commands::classify::apply_review_action,
-            commands::classify::confirm_duplicate_keep,
-            commands::classify::get_date_review_queue,
-            commands::classify::apply_date_approval,
+            commands::metadata::get_date_review_queue,
+            commands::metadata::apply_date_approval,
             commands::organize::run_event_grouping,
             commands::organize::get_event_groups,
             commands::organize::rename_event_group,
