@@ -637,7 +637,7 @@ export function App() {
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 10, opacity: 0 }}
             transition={{ duration: 0.22, ease: "easeOut" }}
-            className="dashboardCanvas"
+            className="dashboardCanvas bg-slate-50"
           >
             <div className="dashboardHeroShell">
               <ProgressHero

@@ -9,13 +9,13 @@ interface ProgressHeroProps {
 
 export const ProgressHero: React.FC<ProgressHeroProps> = ({ total, filed, needingReview, onAction }) => {
   const percentage = total > 0 ? Math.round((filed / total) * 100) : 0;
-  const strokeDasharray = 471;
+  const strokeDasharray = 502.6;
   const strokeDashoffset = strokeDasharray - (strokeDasharray * percentage) / 100;
 
   return (
     <div className="relative overflow-hidden rounded-2xl bg-white p-10 shadow-paper border-none progressHeroRoot" data-testid="dashboard-progress-hero">
       <div className="flex flex-col items-center gap-12 md:flex-row progressHeroContent">
-        <div className="relative flex h-44 w-44 items-center justify-center progressHeroRingWrap">
+        <div className="relative flex h-48 w-48 items-center justify-center progressHeroRingWrap">
           <svg className="h-full w-full -rotate-90" aria-hidden="true">
             <defs>
               <linearGradient id="petalGradient" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -24,11 +24,11 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({ total, filed, needin
                 <stop offset="100%" stopColor="#FDBA74" />
               </linearGradient>
             </defs>
-            <circle cx="88" cy="88" r="75" className="fill-none stroke-slate-50" strokeWidth="10" />
+            <circle cx="96" cy="96" r="80" className="fill-none stroke-slate-50" strokeWidth="10" />
             <circle
-              cx="88"
-              cy="88"
-              r="75"
+              cx="96"
+              cy="96"
+              r="80"
               className="fill-none transition-all duration-1000 ease-out"
               stroke="url(#petalGradient)"
               strokeWidth="12"
