@@ -9,9 +9,8 @@ interface ProgressHeroProps {
 
 export const ProgressHero: React.FC<ProgressHeroProps> = ({ total, filed, needingReview, onAction }) => {
   const percentage = total > 0 ? Math.round((filed / total) * 100) : 0;
-  const radius = 70;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (percentage / 100) * circumference;
+  const strokeDasharray = 471;
+  const strokeDashoffset = strokeDasharray - (strokeDasharray * percentage) / 100;
 
   return (
     <div className="relative overflow-hidden rounded-2xl bg-white p-10 shadow-paper border-none progressHeroRoot" data-testid="dashboard-progress-hero">
@@ -25,16 +24,16 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({ total, filed, needin
                 <stop offset="100%" stopColor="#FDBA74" />
               </linearGradient>
             </defs>
-            <circle cx="88" cy="88" r={radius} className="fill-none stroke-slate-50" strokeWidth="10" />
+            <circle cx="88" cy="88" r="75" className="fill-none stroke-slate-50" strokeWidth="10" />
             <circle
               cx="88"
               cy="88"
-              r={radius}
+              r="75"
               className="fill-none transition-all duration-1000 ease-out"
               stroke="url(#petalGradient)"
-              strokeWidth="14"
-              strokeDasharray={circumference}
-              strokeDashoffset={offset}
+              strokeWidth="12"
+              strokeDasharray={strokeDasharray}
+              strokeDashoffset={strokeDashoffset}
               strokeLinecap="round"
             />
           </svg>

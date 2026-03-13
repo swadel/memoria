@@ -325,11 +325,11 @@ body {
 
 .card {
   background: #ffffff;
-  border: 1px solid transparent;
+  border: none;
   border-radius: 16px;
   padding: 16px;
   backdrop-filter: blur(14px);
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
 }
 
 .pageHeader {
@@ -465,26 +465,28 @@ button:hover {
 }
 
 .settingsField {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex: 1 1 280px;
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 10px 14px;
+  align-items: center;
+  flex: 1 1 100%;
   min-width: 0;
 }
 
 .settingsFormGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 16px;
+  grid-template-columns: 1fr;
+  gap: 14px;
   align-items: start;
 }
 
 .settingsFieldLabel {
-  margin-bottom: 2px;
+  margin-bottom: 0;
+  text-align: left;
 }
 
 .settingsInput {
-  width: 100%;
+  width: min(100%, 448px);
   max-width: 520px;
   min-height: 42px;
   padding: 10px 12px;
@@ -499,12 +501,13 @@ button:hover {
 
 .settingsInlineAction {
   width: fit-content;
+  grid-column: 2;
 }
 
 .settingsModelCard {
-  padding: 12px;
+  padding: 12px 0;
   border-radius: 12px;
-  background: #f8fafc;
+  background: transparent;
 }
 
 .responsiveInput {
@@ -1123,6 +1126,50 @@ button:hover {
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 14px;
   padding: 12px;
+}
+
+.resetModalCard {
+  width: min(560px, 94vw);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  padding: 20px;
+}
+
+.resetModalTitle {
+  margin: 0 0 8px;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.resetModalDescription {
+  margin: 0 0 8px;
+  color: #475569;
+}
+
+.resetModalActions {
+  margin-top: 10px;
+}
+
+.resetDeleteBtn {
+  background: linear-gradient(180deg, #fdba74, #fb7185);
+  border: 1px solid rgba(251, 113, 133, 0.5);
+  color: #7c2d12;
+}
+
+.resetStateBtn {
+  background: #ffffff;
+  border: 1px solid rgba(147, 197, 253, 0.8);
+  color: #1d4ed8;
+}
+
+.resetCancelBtn {
+  border: none;
+  background: transparent;
+  color: #64748b;
 }
 
 .muted {

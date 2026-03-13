@@ -1252,10 +1252,19 @@ export function App() {
 
       {showResetPrompt && (
         <div className="lightboxOverlay" data-testid="reset-session-overlay" onClick={() => (busyAction === "reset" ? undefined : setShowResetPrompt(false))}>
-          <div className="lightboxCard" role="dialog" aria-label="Reset session confirmation" data-testid="reset-session-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginTop: 0 }}>Reset Session?</h3>
-            <p className="muted">This clears pipeline data and keeps your configuration settings.</p>
-            <p className="muted">Choose whether to also delete generated files in output folders (`staging`, `organized`, `recycle`).</p>
+          <motion.div
+            className="lightboxCard resetModalCard"
+            role="dialog"
+            aria-label="Reset session confirmation"
+            data-testid="reset-session-dialog"
+            initial={{ opacity: 0, scale: 0.95, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ type: "spring", stiffness: 260, damping: 22 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="resetModalTitle">Reset Session?</h3>
+            <p className="resetModalDescription">This clears pipeline data and keeps your configuration settings.</p>
+            <p className="resetModalDescription">Choose whether to also delete generated files in output folders (`staging`, `organized`, `recycle`).</p>
             {resetError ? (
               <div className="danger" data-testid="reset-session-error" style={{ marginBottom: 8 }}>
                 {resetError}
@@ -1266,18 +1275,18 @@ export function App() {
                 ⏳ Reset in progress...
               </div>
             ) : null}
-            <div className="row">
-              <MotionPrimaryButton data-testid="reset-session-delete-files" className="primaryBtn" disabled={busyAction !== null} onClick={() => void onResetSession(true)}>
+            <div className="row resetModalActions">
+              <button data-testid="reset-session-delete-files" className="resetDeleteBtn" disabled={busyAction !== null} onClick={() => void onResetSession(true)}>
                 {resetMode === "delete" && busyAction === "reset" ? "Resetting..." : "Reset and Delete Files"}
-              </MotionPrimaryButton>
-              <button data-testid="reset-session-keep-files" className="secondaryBtn" disabled={busyAction !== null} onClick={() => void onResetSession(false)}>
+              </button>
+              <button data-testid="reset-session-keep-files" className="resetStateBtn" disabled={busyAction !== null} onClick={() => void onResetSession(false)}>
                 {resetMode === "state" && busyAction === "reset" ? "Resetting..." : "Reset App State Only"}
               </button>
-              <button data-testid="reset-session-cancel" className="secondaryBtn" disabled={busyAction !== null} onClick={() => setShowResetPrompt(false)}>
+              <button data-testid="reset-session-cancel" className="resetCancelBtn" disabled={busyAction !== null} onClick={() => setShowResetPrompt(false)}>
                 Cancel
               </button>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
       <SuccessToast show={showFinalizeToast} onClose={() => setShowFinalizeToast(false)} />
