@@ -16,7 +16,7 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({ total, filed, needin
     <div className="relative overflow-hidden rounded-2xl bg-white p-10 shadow-paper border-none progressHeroRoot" data-testid="dashboard-progress-hero">
       <div className="flex flex-col items-center gap-12 md:flex-row progressHeroContent">
         <div className="relative flex h-48 w-48 items-center justify-center progressHeroRingWrap">
-          <svg className="h-full w-full -rotate-90" aria-hidden="true">
+          <svg className="h-full w-full -rotate-90" viewBox="0 0 192 192" aria-hidden="true">
             <defs>
               <linearGradient id="petalGradient" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stopColor="#93C5FD" />
@@ -24,17 +24,18 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({ total, filed, needin
                 <stop offset="100%" stopColor="#FDBA74" />
               </linearGradient>
             </defs>
-            <circle cx="96" cy="96" r="80" className="fill-none stroke-slate-50" strokeWidth="10" />
+            <circle cx="96" cy="96" r="80" fill="none" stroke="#f8fafc" strokeWidth="10" />
             <circle
               cx="96"
               cy="96"
               r="80"
-              className="fill-none transition-all duration-1000 ease-out"
+              fill="none"
               stroke="url(#petalGradient)"
               strokeWidth="12"
               strokeDasharray={strokeDasharray}
               strokeDashoffset={strokeDashoffset}
               strokeLinecap="round"
+              style={{ transition: "stroke-dashoffset 1000ms ease-out" }}
             />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center progressHeroPercent">

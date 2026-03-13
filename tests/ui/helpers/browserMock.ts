@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "reset-error" | "reset-slow";
+type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "reset-error" | "reset-slow" | "ingest-slow";
 
 type DateEstimate = {
   mediaItemId: number;
@@ -58,8 +58,9 @@ type ImageReviewItem = {
 };
 
 function buildState(profile: BrowserFixtureProfile) {
+  const isIngestSlow = profile === "ingest-slow";
   const dateItems: DateEstimate[] =
-    profile === "settings-only"
+    profile === "settings-only" || isIngestSlow
       ? []
       : [
           {
@@ -81,7 +82,7 @@ function buildState(profile: BrowserFixtureProfile) {
         ];
 
   const eventGroups: EventGroup[] =
-    profile === "settings-only"
+    profile === "settings-only" || isIngestSlow
       ? []
       : [
           {
@@ -95,7 +96,7 @@ function buildState(profile: BrowserFixtureProfile) {
         ];
 
   const eventGroupItemsByGroupId: Record<number, EventGroupItem[]> =
-    profile === "settings-only"
+    profile === "settings-only" || isIngestSlow
       ? {}
       : {
           401:
@@ -132,7 +133,7 @@ function buildState(profile: BrowserFixtureProfile) {
         };
 
   const stats = {
-    total: 8,
+    total: isIngestSlow ? 0 : 8,
     indexed: 2,
     imageReview: 2,
     imageVerified: 4,
@@ -142,12 +143,12 @@ function buildState(profile: BrowserFixtureProfile) {
     grouped: 2,
     filed: 1,
     imageFlaggedPending: 2,
-    imagePhaseState: (profile === "pre-video" ? "in_progress" : "complete") as "pending" | "in_progress" | "complete",
+    imagePhaseState: (profile === "pre-video" || isIngestSlow ? "pending" : "complete") as "pending" | "in_progress" | "complete",
     videoTotal: 3,
     videoFlagged: 2,
     videoExcluded: 1,
     videoUnreviewedFlagged: 2,
-    videoPhaseState: (profile === "pre-video" ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
+    videoPhaseState: (profile === "pre-video" || isIngestSlow ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
   };
 
   const imageItems: ImageReviewItem[] = [
@@ -263,7 +264,8 @@ function buildState(profile: BrowserFixtureProfile) {
     imageItems,
     videoItems,
     nextGroupId: 402,
-    resetBehavior: profile === "reset-error" ? "error" : profile === "reset-slow" ? "slow" : "normal"
+    resetBehavior: profile === "reset-error" ? "error" : profile === "reset-slow" ? "slow" : "normal",
+    ingestBehavior: isIngestSlow ? "slow" : "normal"
   };
 }
 
@@ -339,10 +341,23 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "set_output_directory":
               state.config.outputDirectory = String(args?.path ?? state.config.outputDirectory);
               return Promise.resolve();
+            case "start_download_session":
+              if (state.ingestBehavior === "slow") {
+                return new Promise((resolve) =>
+                  setTimeout(() => {
+                    state.stats = {
+                      ...state.stats,
+                      total: 8,
+                      indexed: 2
+                    };
+                    resolve(undefined);
+                  }, 350)
+                );
+              }
+              return Promise.resolve();
             case "set_openai_key":
             case "set_anthropic_key":
             case "set_ai_task_model":
-            case "start_download_session":
             case "run_event_grouping":
             case "finalize_organization":
             case "run_image_review_scan":

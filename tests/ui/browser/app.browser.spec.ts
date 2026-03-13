@@ -29,6 +29,46 @@ test.describe("Memoria browser UI", () => {
     await expect(page.getByTestId("dashboard-progress-hero")).toBeVisible();
   });
 
+  test("dashboard progress ring is hollow, gradient, and computed", async ({ page }) => {
+    const ringCircles = page.locator("[data-testid='dashboard-progress-hero'] svg circle");
+    await expect(ringCircles).toHaveCount(2);
+
+    const attrs = await ringCircles.evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        fill: node.getAttribute("fill"),
+        stroke: node.getAttribute("stroke"),
+        strokeDasharray: node.getAttribute("stroke-dasharray"),
+        strokeDashoffset: node.getAttribute("stroke-dashoffset")
+      }))
+    );
+
+    expect(attrs[0]?.fill).toBe("none");
+    expect(attrs[1]?.fill).toBe("none");
+    expect(attrs[1]?.stroke).toBe("url(#petalGradient)");
+
+    const dasharray = Number(attrs[1]?.strokeDasharray ?? "0");
+    const dashoffset = Number(attrs[1]?.strokeDashoffset ?? "0");
+    expect(dasharray).toBeCloseTo(502.6, 1);
+    expect(dashoffset).toBeGreaterThanOrEqual(0);
+    expect(dashoffset).toBeLessThanOrEqual(dasharray);
+  });
+
+  test("indexing uses LoadingState component with branded logo", async ({ context }) => {
+    const ingestPage = await context.newPage();
+    await installBrowserApiMock(ingestPage, "ingest-slow");
+    await ingestPage.goto("/");
+
+    await ingestPage.getByTestId("tab-dashboard").click();
+    await expect(ingestPage.getByTestId("global-loading-state")).toBeVisible();
+    await expect(ingestPage.getByTestId("loading-state-root")).toBeVisible();
+    await expect(ingestPage.getByTestId("loading-state-logo")).toBeVisible();
+    await expect(ingestPage.getByTestId("loading-state-logo")).toHaveClass(/h-24/);
+    await expect(ingestPage.getByTestId("loading-state-logo")).toHaveClass(/w-24/);
+    await expect(ingestPage.getByTestId("loading-state-logo")).toHaveClass(/mix-blend-multiply/);
+    await expect(ingestPage.getByText("Indexing your media...")).toBeVisible();
+    await ingestPage.close();
+  });
+
   test("image review supports flagged and burst workflows", async ({ page }) => {
     await page.getByTestId("tab-images").click();
     await expect(page.getByTestId("image-review-view")).toBeVisible();
@@ -86,8 +126,9 @@ test.describe("Memoria browser UI", () => {
     await page.getByTestId("date-skip-301").click();
     await page.getByTestId("date-skip-302").click();
     await expect(page.locator("[data-testid^='date-item-']")).toHaveCount(0);
+    await expect(page.getByTestId("date-done-proceed-events")).toBeVisible();
+    await page.getByTestId("date-done-proceed-events").click();
 
-    await page.getByTestId("tab-events").click();
     await expect(page.getByTestId("event-groups-card")).toBeVisible();
   });
 

@@ -1,5 +1,5 @@
 import React from "react";
-import logo from "../../assets/logo.png";
+import logo from "../../assets/flower_1024.png";
 
 interface LoadingStateProps {
   message?: string;
@@ -7,13 +7,14 @@ interface LoadingStateProps {
 
 export const LoadingState: React.FC<LoadingStateProps> = ({ message = "Processing..." }) => {
   return (
-    <div className="flex flex-col items-center justify-center p-12 space-y-6">
+    <div className="flex min-h-[60vh] flex-col items-center justify-center p-16 space-y-6" data-testid="loading-state-root">
       <div className="relative">
         <div className="absolute inset-0 bg-petal-blue/20 blur-3xl rounded-full animate-pulse" />
         <img
           src={logo}
-          className="relative h-24 w-24 object-contain animate-pulse"
+          className="relative h-24 w-24 object-contain mix-blend-multiply animate-pulse"
           style={{ animationDuration: "3s" }}
+          data-testid="loading-state-logo"
           alt="Memoria Logo"
         />
       </div>

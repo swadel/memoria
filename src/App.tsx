@@ -465,7 +465,7 @@ export function App() {
     return (completeCount / 6) * 100;
   }, [workflowSteps]);
   const loadingMessage = useMemo(() => {
-    if (busyAction === "ingest") return "Indexing your media library...";
+    if (busyAction === "ingest") return "Indexing your media...";
     if (busyAction === "date-enforcement") return "Estimating dates with AI...";
     if (busyAction === "group") return "Generating event names with AI...";
     if (busyAction === "finalize") return "Finalizing folders and organizing files...";
@@ -707,6 +707,21 @@ export function App() {
               ))}
             </div>
           )}
+          {dateItems.length === 0 ? (
+            <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+              <MotionPrimaryButton
+                data-testid="date-done-proceed-events"
+                className="primaryBtn"
+                disabled={busyAction !== null}
+                onClick={() => {
+                  void onRunGrouping();
+                  setTab("events");
+                }}
+              >
+                Done - Proceed to Event Grouping
+              </MotionPrimaryButton>
+            </div>
+          ) : null}
         </div>
         </motion.div>
       )}
