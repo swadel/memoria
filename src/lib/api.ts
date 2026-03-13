@@ -100,12 +100,16 @@ export function getMediaPreview(mediaItemId: number) {
   return invokeCommand<string | null>("get_media_preview", { mediaItemId });
 }
 
+export function getMediaFullResolution(mediaItemId: number) {
+  return invokeCommand<string | null>("get_media_full_resolution", { mediaItemId });
+}
+
 export function applyReviewAction(ids: number[], action: "include" | "delete") {
   return invokeCommand<void>("apply_review_action", { ids, action });
 }
 
 export function confirmDuplicateKeep(mediaItemId: number) {
-  return invokeCommand<void>("confirm_duplicate_keep", { media_item_id: mediaItemId });
+  return invokeCommand<void>("confirm_duplicate_keep", { mediaItemId });
 }
 
 export function getDateReviewQueue() {

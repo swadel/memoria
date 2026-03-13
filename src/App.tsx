@@ -6,6 +6,7 @@ import {
   applyReviewAction,
   finalizeOrganization,
   getAppConfiguration,
+  getMediaFullResolution,
   getToolHealth,
   getDashboardStats,
   getDateReviewQueue,
@@ -70,6 +71,7 @@ export function App() {
   const [showResetPrompt, setShowResetPrompt] = useState(false);
   const [toolHealth, setToolHealth] = useState<ToolHealth | null>(null);
   const [thumbVersion, setThumbVersion] = useState(0);
+  const [lightboxSrc, setLightboxSrc] = useState<string>("");
   const [pipelineStages, setPipelineStages] = useState<Record<PipelineStage, PipelineStageState>>({
     index: "idle",
     classify: "idle",
@@ -165,6 +167,28 @@ export function App() {
   }, [lightbox]);
 
   const lightboxCurrent = lightbox ? lightbox.items[lightbox.index] : null;
+
+  useEffect(() => {
+    if (!lightboxCurrent) {
+      setLightboxSrc("");
+      return;
+    }
+    let cancelled = false;
+    setLightboxSrc(getReviewOriginalUrl(lightboxCurrent, thumbVersion));
+    if ((window as Window).__MEMORIA_TEST_API__) {
+      return;
+    }
+    getMediaFullResolution(lightboxCurrent.id)
+      .then((dataUrl) => {
+        if (!cancelled && dataUrl) {
+          setLightboxSrc(dataUrl);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [lightboxCurrent?.id, lightboxCurrent?.currentPath, thumbVersion]);
 
   function setStageState(stage: PipelineStage, state: PipelineStageState) {
     setPipelineStages((prev) => ({ ...prev, [stage]: state }));
@@ -949,8 +973,23 @@ export function App() {
             <img
               className="lightboxImage"
               data-testid="lightbox-image"
-              src={getReviewOriginalUrl(lightboxCurrent, thumbVersion)}
+              src={lightboxSrc || getReviewOriginalUrl(lightboxCurrent, thumbVersion)}
               alt={lightboxCurrent.filename}
+              onError={(e) => {
+                const img = e.currentTarget as HTMLImageElement;
+                const step = Number(img.dataset.fallbackStep ?? "0");
+                if (step === 0) {
+                  img.dataset.fallbackStep = "1";
+                  img.src = getReviewOriginalFileUrl(lightboxCurrent, thumbVersion);
+                  return;
+                }
+                if (step === 1) {
+                  img.dataset.fallbackStep = "2";
+                  img.src = getReviewThumbnailUrl(lightboxCurrent, thumbVersion);
+                  return;
+                }
+                img.src = getThumbFallbackDataUrl(lightboxCurrent.filename);
+              }}
             />
             <div className="muted" style={{ marginTop: 8 }}>
               Use ←/→ keys to navigate duplicates.

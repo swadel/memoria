@@ -148,6 +148,7 @@ pub fn run() {
             commands::classify::run_classification,
             commands::classify::get_review_queue,
             commands::classify::get_media_preview,
+            commands::classify::get_media_full_resolution,
             commands::classify::apply_review_action,
             commands::classify::confirm_duplicate_keep,
             commands::classify::get_date_review_queue,
