@@ -46,10 +46,7 @@ pub async fn get_media_preview(media_item_id: i64, state: State<'_, AppState>) -
         return Ok(None);
     }
 
-    if let Some(parent) = current.parent() {
-        let thumb = parent
-            .join(".thumbnails")
-            .join(format!("{media_item_id}.jpg"));
+    for thumb in thumbnail_candidates(&current, media_item_id) {
         if let Some(url) = read_as_data_url(&thumb).await.map_err(|e| e.to_string())? {
             return Ok(Some(url));
         }
@@ -237,8 +234,12 @@ async fn stage_review_items(conn: &rusqlite::Connection, state: &AppState) -> Re
             }
         }
         // Best-effort thumbnail generation (especially useful for HEIC on Windows).
-        let thumb_path = thumbs_dir.join(format!("{id}.jpg"));
-        let _ = ensure_thumbnail(&effective_path, &thumb_path).await;
+        let thumb_id_path = thumbs_dir.join(format!("{id}.jpg"));
+        let _ = ensure_thumbnail(&effective_path, &thumb_id_path).await;
+        if let Some(stem) = Path::new(&filename).file_stem().and_then(|s| s.to_str()) {
+            let thumb_name_path = thumbs_dir.join(format!("{stem}.jpg"));
+            let _ = ensure_thumbnail(&effective_path, &thumb_name_path).await;
+        }
     }
     Ok(())
 }
@@ -265,6 +266,18 @@ fn is_image_copy_candidate(path: &Path) -> bool {
         ext.as_str(),
         "jpg" | "jpeg" | "png" | "webp" | "bmp" | "gif" | "tif" | "tiff"
     )
+}
+
+fn thumbnail_candidates(current: &Path, media_item_id: i64) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(parent) = current.parent() {
+        let thumbs_dir = parent.join(".thumbnails");
+        out.push(thumbs_dir.join(format!("{media_item_id}.jpg")));
+        if let Some(stem) = current.file_stem().and_then(|s| s.to_str()) {
+            out.push(thumbs_dir.join(format!("{stem}.jpg")));
+        }
+    }
+    out
 }
 
 async fn read_as_data_url(path: &Path) -> Result<Option<String>> {

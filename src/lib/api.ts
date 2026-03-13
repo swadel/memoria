@@ -97,7 +97,7 @@ export function getReviewQueue() {
 }
 
 export function getMediaPreview(mediaItemId: number) {
-  return invokeCommand<string | null>("get_media_preview", { media_item_id: mediaItemId });
+  return invokeCommand<string | null>("get_media_preview", { mediaItemId });
 }
 
 export function applyReviewAction(ids: number[], action: "include" | "delete") {
