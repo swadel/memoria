@@ -160,11 +160,27 @@ test.describe("Memoria browser UI smoke", () => {
       expect(rows).toBe(Math.ceil(11 / columns));
       observedColumns.push(columns);
 
+      const innerTotalSize = await page.getByTestId("event-virtual-grid-inner").evaluate((el) => {
+        const totalSizeAttr = Number(el.getAttribute("data-total-size") ?? "0");
+        const heightValue = parseFloat((el as HTMLElement).style.height);
+        return { totalSizeAttr, heightValue };
+      });
+      expect(Math.round(innerTotalSize.heightValue)).toBe(Math.round(innerTotalSize.totalSizeAttr));
+
       await grid.evaluate((el) => {
         const viewport = el as HTMLElement;
         viewport.scrollTop = viewport.scrollHeight;
       });
       await page.waitForTimeout(50);
+
+      const visibleRows = page.locator("[data-testid^='event-virtual-row-']");
+      const visibleCount = await visibleRows.count();
+      expect(visibleCount).toBeGreaterThan(0);
+      for (let index = 0; index < visibleCount; index += 1) {
+        const row = visibleRows.nth(index);
+        await expect(row).toHaveAttribute("data-measure-element", "true");
+        await expect(row).toHaveAttribute("data-index", /\d+/);
+      }
 
       const emptyCells = await page.getByTestId("event-empty-slot").count();
       if (11 % columns !== 0) {

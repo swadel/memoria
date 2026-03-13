@@ -28,7 +28,12 @@ import {
   type ToolHealth
 } from "./lib/api";
 import {
+  CARD_BUTTON_HEIGHT,
+  CARD_GAP,
+  CARD_LABEL_HEIGHT,
+  ITEM_HEIGHT,
   MIN_ITEM_WIDTH,
+  THUMBNAIL_SIZE,
   calculateColumnCount,
   calculateEmptySlotsInRow,
   calculateRowCount
@@ -1078,7 +1083,7 @@ function EventGroupDetailView({
   const rowVirtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => containerRef.current,
-    estimateSize: () => MIN_ITEM_WIDTH + 60,
+    estimateSize: () => ITEM_HEIGHT,
     overscan: 3
   });
   const selected = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
@@ -1149,8 +1154,21 @@ function EventGroupDetailView({
         data-testid="event-virtual-grid"
         data-column-count={columnCount}
         data-row-count={rowCount}
+        style={{
+          height: "calc(100vh - 160px)",
+          overflow: "auto",
+          position: "relative"
+        }}
       >
-        <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+        <div
+          data-testid="event-virtual-grid-inner"
+          data-total-size={rowVirtualizer.getTotalSize()}
+          style={{
+            height: `${rowVirtualizer.getTotalSize()}px`,
+            position: "relative",
+            width: "100%"
+          }}
+        >
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const startIndex = virtualRow.index * columnCount;
             const rowItems = items.slice(startIndex, startIndex + columnCount);
@@ -1159,15 +1177,20 @@ function EventGroupDetailView({
               <div
                 key={virtualRow.key}
                 data-testid={`event-virtual-row-${virtualRow.index}`}
+                data-index={virtualRow.index}
+                data-measure-element="true"
                 className="eventVirtualRow"
+                ref={rowVirtualizer.measureElement}
                 style={{
                   position: "absolute",
                   top: virtualRow.start,
                   left: 0,
                   right: 0,
+                  height: `${virtualRow.size}px`,
                   display: "flex",
                   gap: "8px",
-                  padding: "0 8px"
+                  padding: "0 8px",
+                  boxSizing: "border-box"
                 }}
               >
                 {rowItems.map((item, offset) => {
@@ -1238,26 +1261,58 @@ function EventThumbCard({
     <div
       className={selected ? "eventThumbCard selected" : "eventThumbCard"}
       data-testid={`event-media-item-${item.id}`}
-      style={style}
+      style={{
+        ...style,
+        height: ITEM_HEIGHT - CARD_GAP,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden"
+      }}
     >
       <button
         className="eventThumbPreviewButton"
         data-testid={`event-media-preview-${item.id}`}
         onClick={onOpenPreview}
       >
-        <img className="eventThumbImage" src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)} alt={item.filename} />
+        <img
+          className="eventThumbImage"
+          src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)}
+          alt={item.filename}
+          style={{
+            width: "100%",
+            height: THUMBNAIL_SIZE,
+            objectFit: "cover",
+            flexShrink: 0
+          }}
+        />
       </button>
-      <div className="eventThumbMeta">
-        <strong className="truncateOneLine">{item.filename}</strong>
-        <div className="muted truncateOneLine">{item.dateTaken ?? "(missing date)"}</div>
+      <div className="eventThumbMeta" style={{ padding: "6px 8px", flexShrink: 0, minHeight: CARD_LABEL_HEIGHT }}>
+        <strong
+          className="truncateOneLine"
+          style={{ fontSize: 12, fontWeight: 500 }}
+        >
+          {item.filename}
+        </strong>
+        <div className="muted truncateOneLine" style={{ fontSize: 11 }}>
+          {item.dateTaken ?? "(missing date)"}
+        </div>
       </div>
-      <button
-        className="eventThumbSelectButton"
-        data-testid={`event-media-select-${item.id}`}
-        onClick={(event) => onToggle(event.shiftKey)}
+      <div
+        style={{
+          padding: "0 8px 8px",
+          marginTop: "auto",
+          flexShrink: 0
+        }}
       >
-        {selected ? "Selected" : "Select"}
-      </button>
+        <button
+          className="eventThumbSelectButton"
+          data-testid={`event-media-select-${item.id}`}
+          onClick={(event) => onToggle(event.shiftKey)}
+          style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT }}
+        >
+          {selected ? "Selected" : "Select"}
+        </button>
+      </div>
       {selected ? <div className="eventThumbCheckmark">✓</div> : null}
     </div>
   );
