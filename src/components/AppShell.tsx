@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import logoImage from "../assets/logo.png";
+import { BrandLogo } from "./UI/BrandLogo";
 
 export function AppShell({
   title,
@@ -8,6 +8,7 @@ export function AppShell({
   progress,
   stepper,
   settingsAction,
+  onHomeClick,
   children
 }: {
   title: string;
@@ -16,6 +17,7 @@ export function AppShell({
   progress: number;
   stepper: ReactNode;
   settingsAction?: ReactNode;
+  onHomeClick?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -24,26 +26,19 @@ export function AppShell({
         <div className="globalProgressFill" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
       </div>
       <header className="appShellHeader mica-surface bg-white/70 backdrop-blur-xl">
-        <div className="topbar">
+        <div className="headerMainRow" data-testid="tab-strip">
           <div className="appBrand">
-            <img
-              src={logoImage}
-              alt=""
-              aria-hidden="true"
-              className="appLogo h-10 w-10 drop-shadow-[0_2px_10px_rgba(0,0,0,0.1)]"
-            />
-            <div>
-            <h1 className="title font-semibold text-2xl tracking-tighter">{title}</h1>
-            <p className="subtitle">{subtitle}</p>
+            <BrandLogo size="h-12" text={title} onClick={onHomeClick} />
+          </div>
+          <div className="headerNavRow">
+            <div className="workflowHeader">
+              {stepper}
             </div>
+            {settingsAction ? <div className="workflowHeaderAction">{settingsAction}</div> : null}
           </div>
           <div className="statusPill" data-testid="status-pill">
-            {status}
+            {status || subtitle}
           </div>
-        </div>
-        <div className="workflowHeader" data-testid="tab-strip">
-          {stepper}
-          {settingsAction ? <div className="workflowHeaderAction">{settingsAction}</div> : null}
         </div>
       </header>
       <main className="appShellContent">{children}</main>

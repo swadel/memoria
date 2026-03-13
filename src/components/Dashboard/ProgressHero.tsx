@@ -1,6 +1,4 @@
 import React from "react";
-import { motion } from "framer-motion";
-import logoImage from "../../assets/logo.png";
 
 interface ProgressHeroProps {
   total: number;
@@ -16,49 +14,52 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({ total, filed, needin
   const offset = circumference - (percentage / 100) * circumference;
 
   return (
-    <div className="relative overflow-hidden rounded-2xl bg-white p-8 shadow-paper progressHeroRoot" data-testid="dashboard-progress-hero">
-      <div className="flex flex-col items-center gap-8 md:flex-row progressHeroContent">
-        <div className="relative flex h-40 w-40 items-center justify-center progressHeroRingWrap">
-          <svg className="h-full w-full -rotate-90">
-            <circle cx="80" cy="80" r={radius} className="fill-none stroke-slate-100" strokeWidth="12" />
+    <div className="relative overflow-hidden rounded-2xl bg-white p-10 shadow-paper border-none progressHeroRoot" data-testid="dashboard-progress-hero">
+      <div className="flex flex-col items-center gap-12 md:flex-row progressHeroContent">
+        <div className="relative flex h-44 w-44 items-center justify-center progressHeroRingWrap">
+          <svg className="h-full w-full -rotate-90" aria-hidden="true">
+            <defs>
+              <linearGradient id="petalGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#93C5FD" />
+                <stop offset="50%" stopColor="#C084FC" />
+                <stop offset="100%" stopColor="#FDBA74" />
+              </linearGradient>
+            </defs>
+            <circle cx="88" cy="88" r={radius} className="fill-none stroke-slate-50" strokeWidth="10" />
             <circle
-              cx="80"
-              cy="80"
+              cx="88"
+              cy="88"
               r={radius}
-              className="fill-none stroke-petal-blue transition-all duration-1000 ease-out"
-              strokeWidth="12"
+              className="fill-none transition-all duration-1000 ease-out"
+              stroke="url(#petalGradient)"
+              strokeWidth="14"
               strokeDasharray={circumference}
               strokeDashoffset={offset}
               strokeLinecap="round"
             />
           </svg>
-          <div className="absolute flex flex-col items-center progressHeroPercent">
-            <span className="text-3xl font-bold text-slate-800">{percentage}%</span>
-            <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Filed</span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center progressHeroPercent">
+            <span className="text-4xl font-bold text-slate-800">{percentage}%</span>
+            <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Filed</span>
           </div>
         </div>
 
-        <div className="flex-1 space-y-4 text-center md:text-left progressHeroBody">
-          <div className="progressHeroIcon" aria-hidden="true">
-            <img src={logoImage} alt="" className="progressHeroIconImage" />
-          </div>
-          <h2 className="text-3xl font-semibold tracking-tight text-slate-900 progressHeroHeading" data-testid="dashboard-progress-copy">
-            You’ve organized {filed} of {total} items.
+        <div className="flex-1 space-y-5 text-center md:text-left progressHeroBody">
+          <h2 className="text-4xl font-semibold tracking-tight text-slate-900 leading-tight progressHeroHeading" data-testid="dashboard-progress-copy">
+            You’ve organized <span className="text-petal-blue">{filed}</span> of {total} items.
           </h2>
-          <p className="text-lg text-slate-600 progressHeroSubtext">
-            {needingReview.images > 0 && `You have ${needingReview.images} images `}
-            {needingReview.images > 0 && needingReview.dates > 0 && "and "}
+          <p className="text-xl text-slate-500 font-medium progressHeroSubtext">
+            {needingReview.images > 0 && `${needingReview.images} images `}
+            {needingReview.images > 0 && needingReview.dates > 0 && "& "}
             {needingReview.dates > 0 && `${needingReview.dates} dates `}
-            ready for your review.
+            ready for review.
           </p>
-          <motion.button
+          <button
             onClick={onAction}
-            className="rounded-full bg-petal-blue px-8 py-3 font-semibold text-white shadow-lg transition-all hover:bg-blue-400 hover:shadow-xl active:scale-95 progressHeroButton"
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
+            className="rounded-full bg-petal-blue px-10 py-4 font-bold text-white shadow-lg transition-all hover:bg-blue-400 hover:-translate-y-1 active:scale-95 progressHeroButton"
           >
             Resume Organizing
-          </motion.button>
+          </button>
         </div>
       </div>
     </div>

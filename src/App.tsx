@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { AppShell } from "./components/AppShell";
 import { ProgressHero } from "./components/Dashboard/ProgressHero";
 import { LoadingState } from "./components/UI/LoadingState";
+import { SuccessToast } from "./components/UI/SuccessToast";
 import { PageHeader } from "./components/PageHeader";
 import { ReviewToolbar } from "./components/ReviewToolbar";
 import { WorkflowStepper, type WorkflowStepState } from "./components/WorkflowStepper";
@@ -167,6 +168,7 @@ export function App() {
     eventNaming: { provider: "anthropic", model: "claude-sonnet-4-6" }
   });
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [showFinalizeToast, setShowFinalizeToast] = useState(false);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
   const [resetError, setResetError] = useState<string>("");
   const [resetMode, setResetMode] = useState<"delete" | "state" | null>(null);
@@ -318,6 +320,7 @@ export function App() {
       await finalizeOrganization();
       await refreshAll();
       setMessage("Organization finalized.");
+      setShowFinalizeToast(true);
     } catch (err) {
       setMessage(`Finalize failed: ${String(err)}`);
       setPipelineStages((prev) => ({ ...prev, finalize: "failed" }));
@@ -604,6 +607,7 @@ export function App() {
       subtitle="Local Media Organizer"
       status={message || "Ready"}
       progress={globalProgressPct}
+      onHomeClick={() => setTab("dashboard")}
       stepper={<WorkflowStepper steps={workflowSteps} />}
       settingsAction={
         <button data-testid="tab-settings" className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>
@@ -997,139 +1001,151 @@ export function App() {
             </div>
           </div>
 
-          <h4 className="settingsSectionTitle" data-testid="settings-section-directories">Directories</h4>
-          <div className="row settingsDirectoriesRow">
-            <div className="settingsField">
-              <label className="fieldLabel" htmlFor="settings-working-directory">Working Directory</label>
-              <input
-                id="settings-working-directory"
-                data-testid="settings-working-directory"
-                className="responsiveInput"
-                placeholder="C:\\Memoria\\inbox"
-                value={workingDirectory}
-                onChange={(e) => setWorkingDirectoryState(e.target.value)}
+          <section className="settingsSectionCard" data-testid="settings-section-directories">
+            <h4 className="settingsSectionTitle">Directories</h4>
+            <div className="settingsFormGrid">
+              <div className="settingsField">
+                <label className="fieldLabel settingsFieldLabel" htmlFor="settings-working-directory">Working Directory</label>
+                <input
+                  id="settings-working-directory"
+                  data-testid="settings-working-directory"
+                  className="settingsInput"
+                  placeholder="C:\\Memoria\\inbox"
+                  value={workingDirectory}
+                  onChange={(e) => setWorkingDirectoryState(e.target.value)}
+                />
+              </div>
+              <div className="settingsField">
+                <label className="fieldLabel settingsFieldLabel" htmlFor="settings-output-directory">Output Directory</label>
+                <input
+                  id="settings-output-directory"
+                  data-testid="settings-output-directory"
+                  className="settingsInput"
+                  placeholder="C:\\Memoria"
+                  value={outputDirectory}
+                  onChange={(e) => setOutputDirectoryState(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="settingsActionRow">
+              <MotionPrimaryButton
+                data-testid="settings-save-directories"
+                className="primaryBtn"
+                onClick={async () => {
+                  try {
+                    await setWorkingDirectory(workingDirectory);
+                    await setOutputDirectory(outputDirectory);
+                    setMessage("Working and output directories saved.");
+                  } catch (err) {
+                    setMessage(`Saving directories failed: ${String(err)}`);
+                  }
+                }}
+              >
+                Save Directories
+              </MotionPrimaryButton>
+            </div>
+          </section>
+
+          <section className="settingsSectionCard" data-testid="settings-section-api-keys">
+            <h4 className="settingsSectionTitle">API Keys</h4>
+            <div className="settingsFormGrid">
+              <div className="settingsField">
+                <label htmlFor="settings-openai-key" className="fieldLabel settingsFieldLabel">OpenAI API Key</label>
+                <input
+                  id="settings-openai-key"
+                  data-testid="settings-openai-key"
+                  type="password"
+                  className="settingsInput"
+                  placeholder="OpenAI API Key"
+                  value={openAiKey}
+                  onChange={(e) => setOpenAiKey(e.target.value)}
+                />
+                <button
+                  data-testid="settings-save-openai-key"
+                  className="secondaryBtn settingsInlineAction"
+                  onClick={async () => {
+                    if (!openAiKey) {
+                      setMessage("Enter an OpenAI API key first.");
+                      return;
+                    }
+                    try {
+                      await setOpenAiKey(openAiKey);
+                      setMessage("OpenAI API key saved in Windows Credential Manager.");
+                    } catch (err) {
+                      setMessage(`Saving OpenAI key failed: ${String(err)}`);
+                    }
+                  }}
+                >
+                  Save OpenAI Key
+                </button>
+              </div>
+              <div className="settingsField">
+                <label htmlFor="settings-anthropic-key" className="fieldLabel settingsFieldLabel">Anthropic API Key</label>
+                <input
+                  id="settings-anthropic-key"
+                  data-testid="settings-anthropic-key"
+                  type="password"
+                  className="settingsInput"
+                  placeholder="Anthropic API Key"
+                  value={anthropicKey}
+                  onChange={(e) => setAnthropicKeyState(e.target.value)}
+                />
+                <button
+                  data-testid="settings-save-anthropic-key"
+                  className="secondaryBtn settingsInlineAction"
+                  onClick={async () => {
+                    if (!anthropicKey) {
+                      setMessage("Enter an Anthropic API key first.");
+                      return;
+                    }
+                    try {
+                      await setAnthropicKey(anthropicKey);
+                      setMessage("Anthropic API key saved.");
+                    } catch (err) {
+                      setMessage(`Saving Anthropic key failed: ${String(err)}`);
+                    }
+                  }}
+                >
+                  Save Anthropic Key
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="settingsSectionCard" data-testid="settings-section-ai-models">
+            <h4 className="settingsSectionTitle">AI Task Models</h4>
+            <div className="settingsFormGrid">
+              <ModelSelector
+                label="Date Estimation"
+                testPrefix="date-estimation"
+                value={aiModels.dateEstimation}
+                onChange={(next) => setAiModels((prev) => ({ ...prev, dateEstimation: next }))}
+              />
+              <ModelSelector
+                label="Event Naming"
+                testPrefix="event-naming"
+                value={aiModels.eventNaming}
+                onChange={(next) => setAiModels((prev) => ({ ...prev, eventNaming: next }))}
               />
             </div>
-            <div className="settingsField">
-              <label className="fieldLabel" htmlFor="settings-output-directory">Output Directory</label>
-              <input
-                id="settings-output-directory"
-                data-testid="settings-output-directory"
-                className="responsiveInput"
-                placeholder="C:\\Memoria"
-                value={outputDirectory}
-                onChange={(e) => setOutputDirectoryState(e.target.value)}
-              />
+            <div className="settingsActionRow">
+              <button
+                data-testid="settings-save-ai-models"
+                className="secondaryBtn"
+                onClick={async () => {
+                  try {
+                    await setAiTaskModel("dateEstimation", aiModels.dateEstimation.provider as "openai" | "anthropic", aiModels.dateEstimation.model);
+                    await setAiTaskModel("eventNaming", aiModels.eventNaming.provider as "openai" | "anthropic", aiModels.eventNaming.model);
+                    setMessage("AI task models saved.");
+                  } catch (err) {
+                    setMessage(`Saving AI models failed: ${String(err)}`);
+                  }
+                }}
+              >
+                Save AI Models
+              </button>
             </div>
-          </div>
-          <div className="row">
-            <MotionPrimaryButton
-              data-testid="settings-save-directories"
-              className="primaryBtn"
-              onClick={async () => {
-                try {
-                  await setWorkingDirectory(workingDirectory);
-                  await setOutputDirectory(outputDirectory);
-                  setMessage("Working and output directories saved.");
-                } catch (err) {
-                  setMessage(`Saving directories failed: ${String(err)}`);
-                }
-              }}
-            >
-              Save Directories
-            </MotionPrimaryButton>
-          </div>
-
-          <h4 className="settingsSectionTitle" data-testid="settings-section-api-keys">API Keys</h4>
-          <div className="row">
-            <label htmlFor="settings-openai-key" className="fieldLabel">OpenAI API Key</label>
-            <input
-              id="settings-openai-key"
-              data-testid="settings-openai-key"
-              type="password"
-              className="responsiveInput"
-              placeholder="OpenAI API Key"
-              value={openAiKey}
-              onChange={(e) => setOpenAiKey(e.target.value)}
-            />
-            <button
-              data-testid="settings-save-openai-key"
-              className="secondaryBtn"
-              onClick={async () => {
-                if (!openAiKey) {
-                  setMessage("Enter an OpenAI API key first.");
-                  return;
-                }
-                try {
-                  await setOpenAiKey(openAiKey);
-                  setMessage("OpenAI API key saved in Windows Credential Manager.");
-                } catch (err) {
-                  setMessage(`Saving OpenAI key failed: ${String(err)}`);
-                }
-              }}
-            >
-              Save OpenAI Key
-            </button>
-            <label htmlFor="settings-anthropic-key" className="fieldLabel">Anthropic API Key</label>
-            <input
-              id="settings-anthropic-key"
-              data-testid="settings-anthropic-key"
-              type="password"
-              className="responsiveInput"
-              placeholder="Anthropic API Key"
-              value={anthropicKey}
-              onChange={(e) => setAnthropicKeyState(e.target.value)}
-            />
-            <button
-              data-testid="settings-save-anthropic-key"
-              className="secondaryBtn"
-              onClick={async () => {
-                if (!anthropicKey) {
-                  setMessage("Enter an Anthropic API key first.");
-                  return;
-                }
-                try {
-                  await setAnthropicKey(anthropicKey);
-                  setMessage("Anthropic API key saved.");
-                } catch (err) {
-                  setMessage(`Saving Anthropic key failed: ${String(err)}`);
-                }
-              }}
-            >
-              Save Anthropic Key
-            </button>
-          </div>
-
-          <h4 className="settingsSectionTitle" data-testid="settings-section-ai-models">AI Task Models</h4>
-          <div className="row">
-            <ModelSelector
-              label="Date Estimation"
-              testPrefix="date-estimation"
-              value={aiModels.dateEstimation}
-              onChange={(next) => setAiModels((prev) => ({ ...prev, dateEstimation: next }))}
-            />
-            <ModelSelector
-              label="Event Naming"
-              testPrefix="event-naming"
-              value={aiModels.eventNaming}
-              onChange={(next) => setAiModels((prev) => ({ ...prev, eventNaming: next }))}
-            />
-            <button
-              data-testid="settings-save-ai-models"
-              className="secondaryBtn"
-              onClick={async () => {
-                try {
-                  await setAiTaskModel("dateEstimation", aiModels.dateEstimation.provider as "openai" | "anthropic", aiModels.dateEstimation.model);
-                  await setAiTaskModel("eventNaming", aiModels.eventNaming.provider as "openai" | "anthropic", aiModels.eventNaming.model);
-                  setMessage("AI task models saved.");
-                } catch (err) {
-                  setMessage(`Saving AI models failed: ${String(err)}`);
-                }
-              }}
-            >
-              Save AI Models
-            </button>
-          </div>
+          </section>
         </div>
         </motion.div>
       )}
@@ -1264,6 +1280,7 @@ export function App() {
           </div>
         </div>
       )}
+      <SuccessToast show={showFinalizeToast} onClose={() => setShowFinalizeToast(false)} />
     </AppShell>
   );
 }
@@ -2859,11 +2876,12 @@ function ModelSelector({
   const providerId = `${testPrefix}-provider`;
   const modelId = `${testPrefix}-model`;
   return (
-    <div className="row" style={{ alignItems: "center", gap: 6 }} data-testid={`model-selector-${testPrefix}`}>
-      <label className="muted" htmlFor={providerId}>{label}</label>
+    <div className="settingsField settingsModelCard" data-testid={`model-selector-${testPrefix}`}>
+      <label className="fieldLabel settingsFieldLabel" htmlFor={providerId}>{label}</label>
       <select
         id={providerId}
         data-testid={`model-provider-${testPrefix}`}
+        className="settingsInput"
         value={value.provider}
         onChange={(e) => onChange({ ...value, provider: e.target.value })}
       >
@@ -2873,7 +2891,7 @@ function ModelSelector({
       <input
         id={modelId}
         data-testid={`model-name-${testPrefix}`}
-        className="responsiveInput"
+        className="settingsInput"
         value={value.model}
         onChange={(e) => onChange({ ...value, model: e.target.value })}
         placeholder="Model name"
