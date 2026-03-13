@@ -129,6 +129,29 @@ pub async fn write_all_dates(path: &Path, date: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn create_thumbnail_ffmpeg(input: &Path, output_jpg: &Path) -> Result<()> {
+    let Some(ffmpeg_bin) = ffmpeg_binary() else {
+        return Err(anyhow!("FFmpeg binary was not found."));
+    };
+    let status = Command::new(ffmpeg_bin)
+        .arg("-y")
+        .arg("-i")
+        .arg(input)
+        .arg("-vf")
+        .arg("scale='min(1024,iw)':-1")
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-update")
+        .arg("1")
+        .arg(output_jpg)
+        .status()
+        .await?;
+    if !status.success() {
+        return Err(anyhow!("ffmpeg thumbnail generation failed"));
+    }
+    Ok(())
+}
+
 fn exiftool_binary() -> Option<PathBuf> {
     static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
     RESOLVED

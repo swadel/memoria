@@ -23,6 +23,9 @@ test.describe("Memoria desktop UI", () => {
     await expect(page.getByTestId("stat-date-review")).not.toContainText("0");
     await expect(page.getByTestId("stat-grouped")).not.toContainText("0");
 
+    await page.getByTestId("tab-dates").click();
+    await expect(page.locator("[data-testid^='date-thumb-']").first()).toBeVisible();
+
     await page.getByTestId("tab-events").click();
     await expect(page.getByTestId("event-groups-card")).toContainText("Ski Trip");
   });

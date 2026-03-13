@@ -134,6 +134,7 @@ pub fn run() {
             commands::download::start_download_session,
             commands::metadata::get_dashboard_stats,
             commands::metadata::get_date_review_queue,
+            commands::metadata::get_date_media_thumbnail,
             commands::metadata::apply_date_approval,
             commands::organize::run_event_grouping,
             commands::organize::get_event_groups,

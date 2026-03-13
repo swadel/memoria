@@ -90,6 +90,10 @@ export function getDateReviewQueue() {
   return invokeCommand<DateEstimate[]>("get_date_review_queue");
 }
 
+export function getDateMediaThumbnail(mediaItemId: number) {
+  return invokeCommand<string | null>("get_date_media_thumbnail", { media_item_id: mediaItemId });
+}
+
 export function applyDateApproval(mediaItemId: number, date: string | null) {
   return invokeCommand<void>("apply_date_approval", { media_item_id: mediaItemId, date });
 }

@@ -27,6 +27,8 @@ test.describe("Memoria browser UI smoke", () => {
   test("handles date approval and event renaming", async ({ page }) => {
     await page.getByTestId("tab-dates").click();
     await expect(page.getByTestId("date-item-301")).toBeVisible();
+    await expect(page.getByTestId("date-thumb-301")).toBeVisible();
+    await expect(page.getByTestId("date-thumb-301")).toHaveAttribute("src", /data:image\/png;base64/);
     await page.getByTestId("date-approve-301").click();
     await expect(page.getByTestId("status-pill")).not.toContainText("failed");
 

@@ -4,6 +4,7 @@ import {
   finalizeOrganization,
   getAppConfiguration,
   getDashboardStats,
+  getDateMediaThumbnail,
   getDateReviewQueue,
   getEventGroups,
   getToolHealth,
@@ -540,8 +541,34 @@ function StatCard({ label, value, danger, testId }: { label: string; value: numb
 
 function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: string | null) => Promise<void> }) {
   const [value, setValue] = useState(item.aiDate ?? "");
+  const [thumbSrc, setThumbSrc] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    getDateMediaThumbnail(item.mediaItemId)
+      .then((src) => {
+        if (!cancelled && src) {
+          setThumbSrc(src);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setThumbSrc("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [item.mediaItemId]);
+
   return (
     <div className="item" data-testid={`date-item-${item.mediaItemId}`}>
+      <img
+        className="dateThumb"
+        data-testid={`date-thumb-${item.mediaItemId}`}
+        src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)}
+        alt={item.filename}
+      />
       <strong>{item.filename}</strong>
       <div className="muted">Current: {item.currentDate ?? "(missing)"}</div>
       <div className="muted">AI: {item.aiDate ?? "(none)"} ({Math.round(item.confidence * 100)}%)</div>
@@ -557,6 +584,16 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
       </div>
     </div>
   );
+}
+
+function getDateThumbFallbackDataUrl(filename: string): string {
+  const label = escapeSvgText(filename.split(".").pop()?.toUpperCase() ?? "FILE");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="#f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#6b7280" font-family="Segoe UI, Arial, sans-serif" font-size="32">${label}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function escapeSvgText(value: string): string {
+  return value.replace(/[<>&'"]/g, "_");
 }
 
 function EventCard({ group, onRename }: { group: EventGroup; onRename: (name: string) => Promise<void> }) {

@@ -76,6 +76,8 @@ function buildState(profile: BrowserFixtureProfile) {
 }
 
 export async function installBrowserApiMock(page: Page, profile: BrowserFixtureProfile = "all") {
+  const tinyPngDataUrl =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4zwAAAQIBAqdpws8AAAAASUVORK5CYII=";
   await page.addInitScript(
     ({ stateBuilderSource }) => {
       (window as any).__MEMORIA_BUILD_STATE__ = new Function(`return (${stateBuilderSource});`)();
@@ -84,7 +86,7 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
   );
 
   await page.addInitScript(
-    ({ fixtureProfile }) => {
+    ({ fixtureProfile, tinyPngDataUrl }) => {
       const state = (function createState() {
         const build = (window as any).__MEMORIA_BUILD_STATE__;
         return build ? build(fixtureProfile) : null;
@@ -109,6 +111,8 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               });
             case "get_date_review_queue":
               return Promise.resolve(state.dateItems);
+            case "get_date_media_thumbnail":
+              return Promise.resolve(tinyPngDataUrl);
             case "get_event_groups":
               return Promise.resolve(state.eventGroups);
             case "set_working_directory":
@@ -163,6 +167,6 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
         }
       };
     },
-    { fixtureProfile: profile }
+    { fixtureProfile: profile, tinyPngDataUrl }
   );
 }

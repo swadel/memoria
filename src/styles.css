@@ -205,6 +205,15 @@ button:hover {
   background: rgba(255, 255, 255, 0.9);
 }
 
+.dateThumb {
+  width: 100%;
+  height: 160px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  margin-bottom: 8px;
+}
+
 .lightboxOverlay {
   position: fixed;
   inset: 0;
