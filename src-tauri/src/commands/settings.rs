@@ -1,4 +1,6 @@
+use anyhow::Result as AnyResult;
 use serde::Serialize;
+use std::path::Path;
 use tauri::State;
 
 use crate::{db, services::settings, AppState};
@@ -25,6 +27,13 @@ pub struct AppConfiguration {
     pub working_directory: String,
     pub output_directory: String,
     pub ai_task_models: AiTaskModels,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetSessionResult {
+    pub deleted_generated_files: bool,
+    pub removed_directories: Vec<String>,
 }
 
 #[tauri::command]
@@ -197,6 +206,49 @@ pub async fn set_ai_task_model(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn reset_session(
+    delete_generated_files: bool,
+    state: State<'_, AppState>,
+) -> Result<ResetSessionResult, String> {
+    let conn = state.open_conn().map_err(|e| e.to_string())?;
+    clear_pipeline_state(&conn).map_err(|e| e.to_string())?;
+    let output = state.root_output();
+    let removed_directories = if delete_generated_files {
+        remove_generated_directories(&output)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        vec![]
+    };
+    Ok(ResetSessionResult {
+        deleted_generated_files: delete_generated_files,
+        removed_directories,
+    })
+}
+
+fn clear_pipeline_state(conn: &rusqlite::Connection) -> AnyResult<()> {
+    conn.execute_batch(
+        "DELETE FROM audit_log;
+         DELETE FROM media_items;
+         DELETE FROM event_groups;
+         DELETE FROM download_sessions;",
+    )?;
+    Ok(())
+}
+
+async fn remove_generated_directories(output_root: &Path) -> AnyResult<Vec<String>> {
+    let mut removed = Vec::new();
+    for dir in ["staging", "review", "organized", "recycle"] {
+        let path = output_root.join(dir);
+        if path.exists() {
+            tokio::fs::remove_dir_all(&path).await?;
+            removed.push(path.to_string_lossy().to_string());
+        }
+    }
+    Ok(removed)
+}
+
 fn read_task_model(
     conn: &rusqlite::Connection,
     provider_key: &str,
@@ -270,5 +322,86 @@ mod tests {
 
         drop(conn);
         let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn clear_pipeline_state_preserves_settings() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+        db::set_setting(&conn, "working_directory", r"C:\Photos\Inbox").expect("set working");
+        db::set_setting(&conn, "output_directory", r"C:\Memoria\Output").expect("set output");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, status) VALUES(?1, ?2, 'classified')",
+            ["reset-1", "IMG_1.JPG"],
+        )
+        .expect("insert media");
+        conn.execute(
+            "INSERT INTO event_groups(year, name, folder_name) VALUES(2026, 'Trip', '2026 - Trip')",
+            [],
+        )
+        .expect("insert group");
+        conn.execute(
+            "INSERT INTO download_sessions(date_range_start, date_range_end, status, output_directory)
+             VALUES('local', 'local', 'completed', ?1)",
+            [r"C:\Memoria\Output"],
+        )
+        .expect("insert session");
+
+        clear_pipeline_state(&conn).expect("clear state");
+
+        let media_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0))
+            .expect("media count");
+        let group_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM event_groups", [], |r| r.get(0))
+            .expect("group count");
+        let session_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM download_sessions", [], |r| r.get(0))
+            .expect("session count");
+        assert_eq!(media_count, 0);
+        assert_eq!(group_count, 0);
+        assert_eq!(session_count, 0);
+        assert_eq!(
+            db::get_setting(&conn, "working_directory")
+                .expect("working setting")
+                .as_deref(),
+            Some(r"C:\Photos\Inbox")
+        );
+        assert_eq!(
+            db::get_setting(&conn, "output_directory")
+                .expect("output setting")
+                .as_deref(),
+            Some(r"C:\Memoria\Output")
+        );
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn remove_generated_directories_only_removes_managed_folders() {
+        let root = std::env::temp_dir().join(format!("memoria-reset-test-{}", rand::random::<u64>()));
+        let keep_dir = root.join("keep");
+        let staging = root.join("staging");
+        let review = root.join("review");
+        let organized = root.join("organized");
+        let recycle = root.join("recycle");
+        fs::create_dir_all(&keep_dir).expect("create keep");
+        fs::create_dir_all(&staging).expect("create staging");
+        fs::create_dir_all(&review).expect("create review");
+        fs::create_dir_all(&organized).expect("create organized");
+        fs::create_dir_all(&recycle).expect("create recycle");
+        fs::write(keep_dir.join("safe.txt"), b"keep").expect("write keep marker");
+
+        let removed = remove_generated_directories(&root).await.expect("remove generated");
+        assert_eq!(removed.len(), 4);
+        assert!(!staging.exists());
+        assert!(!review.exists());
+        assert!(!organized.exists());
+        assert!(!recycle.exists());
+        assert!(keep_dir.exists());
+        assert!(keep_dir.join("safe.txt").exists());
+
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -14,6 +14,7 @@ import {
   renameEventGroup,
   runClassification,
   runEventGrouping,
+  resetSession,
   setAiTaskModel,
   setAnthropicKey,
   setWorkingDirectory,
@@ -61,6 +62,7 @@ export function App() {
   const [reviewReasonFilter, setReviewReasonFilter] = useState<string>("all");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<{ items: MediaItem[]; index: number } | null>(null);
+  const [showResetPrompt, setShowResetPrompt] = useState(false);
 
   const selectedCountLabel = useMemo(() => `${selectedReviewIds.length} selected`, [selectedReviewIds]);
 
@@ -243,6 +245,27 @@ export function App() {
     }
   }
 
+  async function onResetSession(deleteGeneratedFiles: boolean) {
+    setBusyAction("reset");
+    try {
+      const result = await resetSession(deleteGeneratedFiles);
+      setSelectedReviewIds([]);
+      setReviewReasonFilter("all");
+      setLightbox(null);
+      setShowResetPrompt(false);
+      await refreshAll();
+      if (result.deletedGeneratedFiles) {
+        setMessage(`Session reset. Removed ${result.removedDirectories.length} generated directories.`);
+      } else {
+        setMessage("Session reset. Configuration was preserved.");
+      }
+    } catch (err) {
+      setMessage(`Reset session failed: ${String(err)}`);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function onSaveOpenAiKey() {
     if (!openAiKey) {
       setMessage("Enter an OpenAI API key first.");
@@ -395,6 +418,14 @@ export function App() {
               </button>
               <button data-testid="pipeline-finalize" className="secondaryBtn" disabled={busyAction !== null} onClick={onFinalize}>
                 {busyAction === "finalize" ? "Finalizing..." : "4) Finalize"}
+              </button>
+              <button
+                data-testid="pipeline-reset-session"
+                className="secondaryBtn"
+                disabled={busyAction !== null}
+                onClick={() => setShowResetPrompt(true)}
+              >
+                {busyAction === "reset" ? "Resetting..." : "Reset Session"}
               </button>
             </div>
             <div className="progressTrack" data-testid="pipeline-progress-track">
@@ -800,6 +831,51 @@ export function App() {
             />
             <div className="muted" style={{ marginTop: 8 }}>
               Use ←/→ keys to navigate duplicates.
+            </div>
+          </div>
+        </div>
+      )}
+      {showResetPrompt && (
+        <div className="lightboxOverlay" data-testid="reset-session-overlay" onClick={() => setShowResetPrompt(false)}>
+          <div
+            className="lightboxCard"
+            role="dialog"
+            aria-label="Reset session confirmation"
+            data-testid="reset-session-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>Reset Session?</h3>
+            <p className="muted">
+              This clears pipeline data (review queue, date approvals, groups, sessions) and keeps your configuration settings.
+            </p>
+            <p className="muted">
+              Choose whether to also delete generated files in output folders (`staging`, `review`, `organized`, `recycle`).
+            </p>
+            <div className="row">
+              <button
+                data-testid="reset-session-delete-files"
+                className="primaryBtn"
+                disabled={busyAction !== null}
+                onClick={() => void onResetSession(true)}
+              >
+                Reset and Delete Files
+              </button>
+              <button
+                data-testid="reset-session-keep-files"
+                className="secondaryBtn"
+                disabled={busyAction !== null}
+                onClick={() => void onResetSession(false)}
+              >
+                Reset App State Only
+              </button>
+              <button
+                data-testid="reset-session-cancel"
+                className="secondaryBtn"
+                disabled={busyAction !== null}
+                onClick={() => setShowResetPrompt(false)}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>

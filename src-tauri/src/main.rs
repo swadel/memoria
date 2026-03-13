@@ -141,6 +141,7 @@ pub fn run() {
             commands::settings::set_anthropic_key,
             commands::settings::set_ai_task_model,
             commands::settings::set_output_directory,
+            commands::settings::reset_session,
             commands::download::start_download_session,
             commands::metadata::get_dashboard_stats,
             commands::classify::run_classification,

@@ -32,6 +32,11 @@ export interface AppConfiguration {
   };
 }
 
+export interface ResetSessionResult {
+  deletedGeneratedFiles: boolean;
+  removedDirectories: string[];
+}
+
 export function initializeApp() {
   return invokeCommand<void>("initialize_app");
 }
@@ -110,4 +115,8 @@ export function renameEventGroup(groupId: number, name: string) {
 
 export function finalizeOrganization() {
   return invokeCommand<void>("finalize_organization");
+}
+
+export function resetSession(deleteGeneratedFiles: boolean) {
+  return invokeCommand<ResetSessionResult>("reset_session", { deleteGeneratedFiles });
 }

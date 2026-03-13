@@ -2,6 +2,7 @@ import { chromium, type Browser, type Page } from "@playwright/test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -25,14 +26,23 @@ export class DesktopHarness {
   }
 
   seedFixture(profile: string) {
-    const cargo = resolveCargoBinary();
+    const appBinary = resolveAppBinary();
+    if (!existsSync(appBinary)) {
+      const cargo = resolveCargoBinary();
+      const buildResult = spawnSync(cargo, ["build", "--manifest-path", "src-tauri/Cargo.toml"], {
+        cwd: process.cwd(),
+        env: withCargoInPath({ ...process.env }),
+        shell: process.platform === "win32",
+        stdio: "pipe",
+        encoding: "utf-8"
+      });
+      if (buildResult.status !== 0) {
+        throw new Error(`Desktop binary build failed: ${buildResult.stderr || buildResult.stdout}`);
+      }
+    }
     const result = spawnSync(
-      cargo,
+      appBinary,
       [
-        "run",
-        "--manifest-path",
-        "src-tauri/Cargo.toml",
-        "--",
         "--seed-fixture",
         profile,
         "--media-root",
@@ -46,7 +56,7 @@ export class DesktopHarness {
           ...process.env,
           MEMORIA_APP_DIR: this.appDir
         }),
-        shell: process.platform === "win32",
+        shell: false,
         stdio: "pipe",
         encoding: "utf-8"
       }
@@ -130,6 +140,16 @@ function resolveCargoBinary(): string {
     }
   }
   return "cargo";
+}
+
+function resolveAppBinary(): string {
+  if (process.env.MEMORIA_E2E_BIN) {
+    return process.env.MEMORIA_E2E_BIN;
+  }
+  if (process.platform === "win32") {
+    return join(process.cwd(), "src-tauri", "target", "debug", "memoria.exe");
+  }
+  return join(process.cwd(), "src-tauri", "target", "debug", "memoria");
 }
 
 function withCargoInPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

@@ -189,6 +189,28 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "run_event_grouping":
             case "finalize_organization":
               return Promise.resolve();
+            case "reset_session": {
+              state.reviewItems = [];
+              state.dateItems = [];
+              state.eventGroups = [];
+              state.stats = {
+                ...state.stats,
+                total: 0,
+                downloading: 0,
+                review: 0,
+                legitimate: 0,
+                dateNeedsReview: 0,
+                grouped: 0,
+                filed: 0,
+                errors: 0
+              };
+              return Promise.resolve({
+                deletedGeneratedFiles: Boolean(args?.deleteGeneratedFiles),
+                removedDirectories: Boolean(args?.deleteGeneratedFiles)
+                  ? ["staging", "review", "organized", "recycle"]
+                  : []
+              });
+            }
             case "apply_review_action": {
               const ids = (args?.ids as number[]) ?? [];
               const action = String(args?.action ?? "");

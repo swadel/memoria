@@ -61,4 +61,27 @@ test.describe("Memoria browser UI smoke", () => {
     await page.getByTestId("settings-save-openai-key").click();
     await expect(page.getByTestId("status-pill")).toContainText("OpenAI API key saved");
   });
+
+  test("resets session without deleting files and keeps settings", async ({ page }) => {
+    await expect(page.getByTestId("stat-total")).toContainText("8");
+    await page.getByTestId("pipeline-reset-session").click();
+    await expect(page.getByTestId("reset-session-dialog")).toBeVisible();
+    await page.getByTestId("reset-session-keep-files").click();
+
+    await expect(page.getByTestId("stat-total")).toContainText("0");
+    await expect(page.getByTestId("stat-review")).toContainText("0");
+    await expect(page.getByTestId("status-pill")).toContainText("Configuration was preserved");
+
+    await page.getByTestId("tab-settings").click();
+    await expect(page.getByTestId("settings-working-directory")).toHaveValue("C:\\fixture\\inbox");
+    await expect(page.getByTestId("settings-output-directory")).toHaveValue("C:\\fixture\\output");
+  });
+
+  test("resets session and deletes generated files", async ({ page }) => {
+    await page.getByTestId("pipeline-reset-session").click();
+    await expect(page.getByTestId("reset-session-dialog")).toBeVisible();
+    await page.getByTestId("reset-session-delete-files").click();
+    await expect(page.getByTestId("status-pill")).toContainText("Removed 4 generated directories");
+    await expect(page.getByTestId("stat-total")).toContainText("0");
+  });
 });

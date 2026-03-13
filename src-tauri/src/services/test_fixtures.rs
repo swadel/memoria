@@ -3,6 +3,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use crate::db;
 
 const TINY_PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
@@ -29,18 +30,22 @@ pub fn seed_fixture(
     output_root: &Path,
 ) -> Result<FixtureSeedSummary> {
     reset_fixture_data(conn)?;
+    db::set_setting(conn, "working_directory", media_root.to_string_lossy().as_ref())?;
+    db::set_setting(conn, "output_directory", output_root.to_string_lossy().as_ref())?;
 
     let review_dir = media_root.join("review");
     let thumbs_dir = review_dir.join(".thumbnails");
     let organized_dir = output_root.join("organized").join("2026").join("2026 - Ski Trip");
     let recycle_dir = output_root.join("recycle");
     let staging_dir = output_root.join("staging");
+    let output_review_dir = output_root.join("review");
 
     fs::create_dir_all(&review_dir)?;
     fs::create_dir_all(&thumbs_dir)?;
     fs::create_dir_all(&organized_dir)?;
     fs::create_dir_all(&recycle_dir)?;
     fs::create_dir_all(&staging_dir)?;
+    fs::create_dir_all(&output_review_dir)?;
 
     let mut media_count = 0_i64;
     let mut event_groups = 0_i64;
