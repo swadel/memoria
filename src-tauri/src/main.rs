@@ -136,6 +136,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::settings::initialize_app,
             commands::settings::get_app_configuration,
+            commands::settings::get_tool_health,
             commands::settings::set_working_directory,
             commands::settings::set_openai_key,
             commands::settings::set_anthropic_key,

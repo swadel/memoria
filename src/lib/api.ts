@@ -37,6 +37,13 @@ export interface ResetSessionResult {
   removedDirectories: string[];
 }
 
+export interface ToolHealth {
+  exiftoolAvailable: boolean;
+  exiftoolPath: string | null;
+  ffmpegAvailable: boolean;
+  ffmpegPath: string | null;
+}
+
 export function initializeApp() {
   return invokeCommand<void>("initialize_app");
 }
@@ -71,6 +78,10 @@ export function setAiTaskModel(
 
 export function getAppConfiguration() {
   return invokeCommand<AppConfiguration>("get_app_configuration");
+}
+
+export function getToolHealth() {
+  return invokeCommand<ToolHealth>("get_tool_health");
 }
 
 export function getDashboardStats() {

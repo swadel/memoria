@@ -6,6 +6,7 @@ import {
   applyReviewAction,
   finalizeOrganization,
   getAppConfiguration,
+  getToolHealth,
   getDashboardStats,
   getDateReviewQueue,
   getEventGroups,
@@ -20,7 +21,8 @@ import {
   setWorkingDirectory,
   setOpenAiKey,
   setOutputDirectory,
-  startDownloadSession
+  startDownloadSession,
+  type ToolHealth
 } from "./lib/api";
 import type { DashboardStats, DateEstimate, EventGroup, MediaItem } from "./types";
 
@@ -65,6 +67,7 @@ export function App() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<{ items: MediaItem[]; index: number } | null>(null);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
+  const [toolHealth, setToolHealth] = useState<ToolHealth | null>(null);
   const [pipelineStages, setPipelineStages] = useState<Record<PipelineStage, PipelineStageState>>({
     index: "idle",
     classify: "idle",
@@ -97,6 +100,12 @@ export function App() {
           setAiModels(cfg.aiTaskModels);
         } catch {
           // Use defaults when config has not been written yet.
+        }
+        try {
+          const health = await getToolHealth();
+          setToolHealth(health);
+        } catch {
+          setToolHealth(null);
         }
         await refreshAll();
       })
@@ -672,6 +681,48 @@ export function App() {
         <div className="card" data-testid="settings-card">
           <h3>Settings</h3>
           <p className="muted">Configuration only needs a working directory and your OpenAI API key.</p>
+          <h4 className="settingsSectionTitle" data-testid="settings-section-tool-health">Dependency Health</h4>
+          <div className="item" data-testid="settings-tool-health-card">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <strong>Runtime Dependencies</strong>
+              <button
+                data-testid="settings-refresh-tool-health"
+                className="secondaryBtn"
+                onClick={async () => {
+                  try {
+                    const health = await getToolHealth();
+                    setToolHealth(health);
+                    setMessage("Dependency health refreshed.");
+                  } catch (err) {
+                    setMessage(`Dependency health refresh failed: ${String(err)}`);
+                  }
+                }}
+              >
+                Refresh
+              </button>
+            </div>
+            <div className="row">
+              <span className={toolHealth?.exiftoolAvailable ? "ok" : "warn"} data-testid="health-exiftool-status">
+                ExifTool: {toolHealth?.exiftoolAvailable ? "available" : "missing"}
+              </span>
+              <span className="muted" data-testid="health-exiftool-path">
+                {toolHealth?.exiftoolPath ?? "(path not resolved)"}
+              </span>
+            </div>
+            <div className="row">
+              <span className={toolHealth?.ffmpegAvailable ? "ok" : "warn"} data-testid="health-ffmpeg-status">
+                FFmpeg: {toolHealth?.ffmpegAvailable ? "available" : "missing"}
+              </span>
+              <span className="muted" data-testid="health-ffmpeg-path">
+                {toolHealth?.ffmpegPath ?? "(path not resolved)"}
+              </span>
+            </div>
+            {toolHealth && (!toolHealth.exiftoolAvailable || !toolHealth.ffmpegAvailable) && (
+              <div className="warn" data-testid="health-warning">
+                Missing dependencies can block metadata extraction and video thumbnails.
+              </div>
+            )}
+          </div>
           <h4 className="settingsSectionTitle" data-testid="settings-section-directories">Directories</h4>
           <div className="row settingsDirectoriesRow">
             <div className="settingsField">

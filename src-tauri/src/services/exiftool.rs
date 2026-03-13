@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     sync::OnceLock,
 };
+use std::process::Stdio;
 use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -16,6 +17,26 @@ pub struct MetadataInfo {
     pub mime_type: Option<String>,
     pub duration_secs: Option<f64>,
     pub content_identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolHealthSnapshot {
+    pub exiftool_available: bool,
+    pub exiftool_path: Option<String>,
+    pub ffmpeg_available: bool,
+    pub ffmpeg_path: Option<String>,
+}
+
+pub fn tool_health_snapshot() -> ToolHealthSnapshot {
+    let exiftool = exiftool_binary();
+    let ffmpeg = ffmpeg_binary();
+    ToolHealthSnapshot {
+        exiftool_available: exiftool.is_some(),
+        exiftool_path: exiftool.map(|p| p.to_string_lossy().to_string()),
+        ffmpeg_available: ffmpeg.is_some(),
+        ffmpeg_path: ffmpeg.map(|p| p.to_string_lossy().to_string()),
+    }
 }
 
 pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
@@ -202,6 +223,8 @@ fn candidate_tool_paths(exe_name: &str) -> Vec<PathBuf> {
 fn command_probe(command: &Path, args: &[&str]) -> bool {
     std::process::Command::new(command)
         .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)

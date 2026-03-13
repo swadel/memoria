@@ -169,6 +169,13 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               return Promise.resolve(state.config);
             case "get_dashboard_stats":
               return Promise.resolve(state.stats);
+            case "get_tool_health":
+              return Promise.resolve({
+                exiftoolAvailable: true,
+                exiftoolPath: "C:\\fixture\\vendor\\exiftool.exe",
+                ffmpegAvailable: true,
+                ffmpegPath: "C:\\fixture\\vendor\\ffmpeg.exe"
+              });
             case "get_review_queue":
               return Promise.resolve(state.reviewItems);
             case "get_date_review_queue":

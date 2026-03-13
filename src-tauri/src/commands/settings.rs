@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::path::Path;
 use tauri::State;
 
-use crate::{db, services::settings, AppState};
+use crate::{db, services::{exiftool, settings}, AppState};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +34,15 @@ pub struct AppConfiguration {
 pub struct ResetSessionResult {
     pub deleted_generated_files: bool,
     pub removed_directories: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolHealth {
+    pub exiftool_available: bool,
+    pub exiftool_path: Option<String>,
+    pub ffmpeg_available: bool,
+    pub ffmpeg_path: Option<String>,
 }
 
 #[tauri::command]
@@ -121,6 +130,17 @@ pub fn get_app_configuration(state: State<'_, AppState>) -> Result<AppConfigurat
         working_directory,
         output_directory,
         ai_task_models,
+    })
+}
+
+#[tauri::command]
+pub fn get_tool_health() -> Result<ToolHealth, String> {
+    let snapshot = exiftool::tool_health_snapshot();
+    Ok(ToolHealth {
+        exiftool_available: snapshot.exiftool_available,
+        exiftool_path: snapshot.exiftool_path,
+        ffmpeg_available: snapshot.ffmpeg_available,
+        ffmpeg_path: snapshot.ffmpeg_path,
     })
 }
 
