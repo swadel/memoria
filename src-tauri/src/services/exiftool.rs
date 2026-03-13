@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -16,7 +19,10 @@ pub struct MetadataInfo {
 }
 
 pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
-    let output = Command::new("exiftool")
+    let Some(exiftool_bin) = exiftool_binary() else {
+        return Ok(MetadataInfo::default());
+    };
+    let output = Command::new(exiftool_bin)
         .arg("-j")
         .arg("-n")
         .arg("-DateTimeOriginal")
@@ -87,7 +93,10 @@ pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
 }
 
 pub async fn write_all_dates(path: &Path, date: &str) -> Result<()> {
-    let status = Command::new("exiftool")
+    let Some(exiftool_bin) = exiftool_binary() else {
+        return Err(anyhow!("ExifTool binary was not found."));
+    };
+    let status = Command::new(exiftool_bin)
         .arg("-overwrite_original")
         .arg(format!("-AllDates={date}"))
         .arg(path)
@@ -100,7 +109,10 @@ pub async fn write_all_dates(path: &Path, date: &str) -> Result<()> {
 }
 
 pub async fn create_thumbnail_ffmpeg(input: &Path, output_jpg: &Path) -> Result<()> {
-    let status = Command::new("ffmpeg")
+    let Some(ffmpeg_bin) = ffmpeg_binary() else {
+        return Err(anyhow!("FFmpeg binary was not found."));
+    };
+    let status = Command::new(ffmpeg_bin)
         .arg("-y")
         .arg("-i")
         .arg(input)
@@ -113,4 +125,104 @@ pub async fn create_thumbnail_ffmpeg(input: &Path, output_jpg: &Path) -> Result<
         return Err(anyhow!("ffmpeg thumbnail generation failed"));
     }
     Ok(())
+}
+
+fn exiftool_binary() -> Option<PathBuf> {
+    static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            resolve_tool_binary(
+                "MEMORIA_EXIFTOOL_PATH",
+                platform_exiftool_name(),
+                &["-ver"],
+            )
+        })
+        .clone()
+}
+
+fn ffmpeg_binary() -> Option<PathBuf> {
+    static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            resolve_tool_binary(
+                "MEMORIA_FFMPEG_PATH",
+                platform_ffmpeg_name(),
+                &["-version"],
+            )
+        })
+        .clone()
+}
+
+fn resolve_tool_binary(env_var: &str, exe_name: &str, probe_args: &[&str]) -> Option<PathBuf> {
+    if let Ok(path) = std::env::var(env_var) {
+        let explicit = PathBuf::from(path);
+        if explicit.exists() && command_probe(&explicit, probe_args) {
+            return Some(explicit);
+        }
+    }
+
+    for candidate in candidate_tool_paths(exe_name) {
+        if candidate.exists() && command_probe(&candidate, probe_args) {
+            return Some(candidate);
+        }
+    }
+
+    let fallback = PathBuf::from(exe_name);
+    if command_probe(&fallback, probe_args) {
+        return Some(fallback);
+    }
+
+    None
+}
+
+fn candidate_tool_paths(exe_name: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    // Development-friendly locations relative to process CWD.
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(exe_name));
+        candidates.push(cwd.join("vendor").join(exe_name));
+        candidates.push(cwd.join("..").join("vendor").join(exe_name));
+        candidates.push(cwd.join("..").join("..").join("vendor").join(exe_name));
+    }
+
+    // Bundle-friendly locations relative to app executable.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join(exe_name));
+            candidates.push(exe_dir.join("resources").join(exe_name));
+            candidates.push(exe_dir.join("..").join("resources").join(exe_name));
+            candidates.push(exe_dir.join("..").join("Resources").join(exe_name));
+        }
+    }
+
+    candidates
+}
+
+fn command_probe(command: &Path, args: &[&str]) -> bool {
+    std::process::Command::new(command)
+        .args(args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn platform_ffmpeg_name() -> &'static str {
+    "ffmpeg.exe"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn platform_ffmpeg_name() -> &'static str {
+    "ffmpeg"
+}
+
+#[cfg(target_os = "windows")]
+fn platform_exiftool_name() -> &'static str {
+    "exiftool.exe"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn platform_exiftool_name() -> &'static str {
+    "exiftool"
 }

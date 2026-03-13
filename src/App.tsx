@@ -25,6 +25,8 @@ import {
 import type { DashboardStats, DateEstimate, EventGroup, MediaItem } from "./types";
 
 type Tab = "dashboard" | "review" | "dates" | "events" | "settings";
+type PipelineStage = "index" | "classify" | "group" | "finalize";
+type PipelineStageState = "idle" | "running" | "completed" | "failed";
 
 const DEFAULT_STATS: DashboardStats = {
   total: 0,
@@ -63,6 +65,12 @@ export function App() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<{ items: MediaItem[]; index: number } | null>(null);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
+  const [pipelineStages, setPipelineStages] = useState<Record<PipelineStage, PipelineStageState>>({
+    index: "idle",
+    classify: "idle",
+    group: "idle",
+    finalize: "idle"
+  });
 
   const selectedCountLabel = useMemo(() => `${selectedReviewIds.length} selected`, [selectedReviewIds]);
 
@@ -147,6 +155,25 @@ export function App() {
 
   const lightboxCurrent = lightbox ? lightbox.items[lightbox.index] : null;
 
+  function setStageState(stage: PipelineStage, state: PipelineStageState) {
+    setPipelineStages((prev) => ({ ...prev, [stage]: state }));
+  }
+
+  function resetDownstreamStages(stage: PipelineStage) {
+    setPipelineStages((prev) => {
+      if (stage === "index") {
+        return { ...prev, classify: "idle", group: "idle", finalize: "idle" };
+      }
+      if (stage === "classify") {
+        return { ...prev, group: "idle", finalize: "idle" };
+      }
+      if (stage === "group") {
+        return { ...prev, finalize: "idle" };
+      }
+      return prev;
+    });
+  }
+
   function openLightbox(items: MediaItem[], selected: MediaItem) {
     const idx = items.findIndex((x) => x.id === selected.id);
     setLightbox({ items, index: idx >= 0 ? idx : 0 });
@@ -162,13 +189,17 @@ export function App() {
 
   async function onStart() {
     setBusyAction("ingest");
+    setStageState("index", "running");
+    resetDownstreamStages("index");
     try {
       await setOutputDirectory(outputDirectory);
       await startDownloadSession({ workingDirectory, outputDirectory });
       setMessage("Local media indexed from working directory.");
       await refreshAll();
+      setStageState("index", "completed");
     } catch (err) {
       setMessage(`Indexing failed: ${String(err)}`);
+      setStageState("index", "failed");
     } finally {
       setBusyAction(null);
     }
@@ -176,12 +207,16 @@ export function App() {
 
   async function onClassify() {
     setBusyAction("classify");
+    setStageState("classify", "running");
+    resetDownstreamStages("classify");
     try {
       await runClassification();
       setMessage("Classification complete.");
       await refreshAll();
+      setStageState("classify", "completed");
     } catch (err) {
       setMessage(`Classification failed: ${String(err)}`);
+      setStageState("classify", "failed");
     } finally {
       setBusyAction(null);
     }
@@ -221,12 +256,16 @@ export function App() {
 
   async function onRunGrouping() {
     setBusyAction("group");
+    setStageState("group", "running");
+    resetDownstreamStages("group");
     try {
       await runEventGrouping();
       setMessage("Grouping generated.");
       await refreshAll();
+      setStageState("group", "completed");
     } catch (err) {
       setMessage(`Grouping failed: ${String(err)}`);
+      setStageState("group", "failed");
     } finally {
       setBusyAction(null);
     }
@@ -234,12 +273,15 @@ export function App() {
 
   async function onFinalize() {
     setBusyAction("finalize");
+    setStageState("finalize", "running");
     try {
       await finalizeOrganization();
       setMessage("Organization finalized.");
       await refreshAll();
+      setStageState("finalize", "completed");
     } catch (err) {
       setMessage(`Finalize failed: ${String(err)}`);
+      setStageState("finalize", "failed");
     } finally {
       setBusyAction(null);
     }
@@ -253,6 +295,12 @@ export function App() {
       setReviewReasonFilter("all");
       setLightbox(null);
       setShowResetPrompt(false);
+      setPipelineStages({
+        index: "idle",
+        classify: "idle",
+        group: "idle",
+        finalize: "idle"
+      });
       await refreshAll();
       if (result.deletedGeneratedFiles) {
         setMessage(`Session reset. Removed ${result.removedDirectories.length} generated directories.`);
@@ -371,7 +419,6 @@ export function App() {
         <>
           <div className="statsGrid" data-testid="dashboard-stats-grid">
             <StatCard label="Total" value={stats.total} testId="stat-total" />
-            <StatCard label="Downloading" value={stats.downloading} testId="stat-downloading" />
             <StatCard label="Review Queue" value={stats.review} testId="stat-review" />
             <StatCard label="Legitimate" value={stats.legitimate} testId="stat-legitimate" />
             <StatCard label="Date Review" value={stats.dateNeedsReview} testId="stat-date-review" />
@@ -407,16 +454,36 @@ export function App() {
               </label>
             </div>
             <div className="row">
-              <button data-testid="pipeline-index" className="primaryBtn" disabled={busyAction !== null} onClick={onStart}>
+              <button
+                data-testid="pipeline-index"
+                className={pipelineButtonClass(pipelineStages.index)}
+                disabled={busyAction !== null}
+                onClick={onStart}
+              >
                 {busyAction === "ingest" ? "Indexing..." : "1) Index Media"}
               </button>
-              <button data-testid="pipeline-classify" className="secondaryBtn" disabled={busyAction !== null} onClick={onClassify}>
+              <button
+                data-testid="pipeline-classify"
+                className={pipelineButtonClass(pipelineStages.classify)}
+                disabled={busyAction !== null}
+                onClick={onClassify}
+              >
                 {busyAction === "classify" ? "Classifying..." : "2) Classify"}
               </button>
-              <button data-testid="pipeline-group" className="secondaryBtn" disabled={busyAction !== null} onClick={onRunGrouping}>
+              <button
+                data-testid="pipeline-group"
+                className={pipelineButtonClass(pipelineStages.group)}
+                disabled={busyAction !== null}
+                onClick={onRunGrouping}
+              >
                 {busyAction === "group" ? "Grouping..." : "3) Group"}
               </button>
-              <button data-testid="pipeline-finalize" className="secondaryBtn" disabled={busyAction !== null} onClick={onFinalize}>
+              <button
+                data-testid="pipeline-finalize"
+                className={pipelineButtonClass(pipelineStages.finalize)}
+                disabled={busyAction !== null}
+                onClick={onFinalize}
+              >
                 {busyAction === "finalize" ? "Finalizing..." : "4) Finalize"}
               </button>
               <button
@@ -888,6 +955,19 @@ export function App() {
       )}
     </div>
   );
+}
+
+function pipelineButtonClass(state: PipelineStageState): string {
+  switch (state) {
+    case "running":
+      return "stageBtn stageBtnRunning";
+    case "completed":
+      return "stageBtn stageBtnCompleted";
+    case "failed":
+      return "stageBtn stageBtnFailed";
+    default:
+      return "stageBtn stageBtnIdle";
+  }
 }
 
 function ReviewItemCard({

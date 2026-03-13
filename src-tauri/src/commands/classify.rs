@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rusqlite::params;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 use crate::{
@@ -207,9 +207,33 @@ async fn stage_review_items(conn: &rusqlite::Connection, state: &AppState) -> Re
         }
         // Best-effort thumbnail generation (especially useful for HEIC on Windows).
         let thumb_path = thumbs_dir.join(format!("{id}.jpg"));
-        let _ = exiftool::create_thumbnail_ffmpeg(&effective_path, &thumb_path).await;
+        let _ = ensure_thumbnail(&effective_path, &thumb_path).await;
     }
     Ok(())
+}
+
+async fn ensure_thumbnail(input: &Path, output: &Path) -> Result<()> {
+    if exiftool::create_thumbnail_ffmpeg(input, output).await.is_ok() {
+        return Ok(());
+    }
+    // Fallback when ffmpeg is unavailable: for common image formats, copy the source
+    // so the UI still has a resolvable preview asset.
+    if is_image_copy_candidate(input) {
+        tokio::fs::copy(input, output).await?;
+    }
+    Ok(())
+}
+
+fn is_image_copy_candidate(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|x| x.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "gif" | "tif" | "tiff"
+    )
 }
 
 #[cfg(test)]

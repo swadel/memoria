@@ -140,6 +140,34 @@ button:hover {
   background: #ffffff;
 }
 
+.stageBtn {
+  border-radius: 12px;
+}
+
+.stageBtnIdle {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #111827;
+}
+
+.stageBtnRunning {
+  background: linear-gradient(180deg, #1f86ff, #0071e3);
+  border-color: rgba(0, 113, 227, 0.7);
+  color: #ffffff;
+}
+
+.stageBtnCompleted {
+  background: linear-gradient(180deg, #27c26a, #16a34a);
+  border-color: rgba(22, 163, 74, 0.7);
+  color: #ffffff;
+}
+
+.stageBtnFailed {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
 .wideInput {
   min-width: 360px;
 }
