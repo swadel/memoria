@@ -232,13 +232,19 @@ pub fn get_event_groups(conn: &Connection) -> Result<Vec<EventGroupDto>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-pub fn get_event_group_items(conn: &Connection, group_id: i64) -> Result<Vec<EventGroupItemDto>> {
-    let mut stmt = conn.prepare(
+pub fn get_event_group_items(conn: &Connection, group_id: i64, show_excluded: bool) -> Result<Vec<EventGroupItemDto>> {
+    let sql = if show_excluded {
         "SELECT id, filename, current_path, date_taken, COALESCE(mime_type, '')
          FROM media_items
-         WHERE event_group_id=?1
-         ORDER BY date_taken ASC, id ASC",
-    )?;
+         WHERE event_group_id=?1 AND status='excluded'
+         ORDER BY date_taken ASC, id ASC"
+    } else {
+        "SELECT id, filename, current_path, date_taken, COALESCE(mime_type, '')
+         FROM media_items
+         WHERE event_group_id=?1 AND status != 'excluded'
+         ORDER BY date_taken ASC, id ASC"
+    };
+    let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([group_id], |row| {
         Ok(EventGroupItemDto {
             id: row.get(0)?,
@@ -319,7 +325,7 @@ pub fn refresh_event_group_item_counts(conn: &Connection, ids: &[i64]) -> Result
     let mut update_stmt = conn.prepare(
         "UPDATE event_groups
          SET item_count=(
-             SELECT COUNT(*) FROM media_items WHERE event_group_id=event_groups.id
+            SELECT COUNT(*) FROM media_items WHERE event_group_id=event_groups.id AND status != 'excluded'
          )
          WHERE id=?1",
     )?;
@@ -427,5 +433,31 @@ mod tests {
 
         drop(conn);
         let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn refresh_event_group_item_counts_only_counts_non_excluded_items() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("db init");
+        conn.execute(
+            "INSERT INTO event_groups(id, year, name, folder_name, item_count, user_approved) VALUES(1, 2026, 'Trip', '2026 - Trip', 0, 1)",
+            [],
+        )
+        .expect("group");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, event_group_id, mime_type) VALUES('a', 'a.jpg', 'C:\\tmp\\a.jpg', 'grouped', 1, 'image/jpeg')",
+            [],
+        )
+        .expect("active");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, event_group_id, mime_type) VALUES('b', 'b.jpg', 'C:\\tmp\\b.jpg', 'excluded', 1, 'image/jpeg')",
+            [],
+        )
+        .expect("excluded");
+        refresh_event_group_item_counts(&conn, &[1]).expect("refresh");
+        let count: i64 = conn
+            .query_row("SELECT item_count FROM event_groups WHERE id=1", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(count, 1);
     }
 }

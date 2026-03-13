@@ -153,6 +153,50 @@ test.describe("Memoria browser UI smoke", () => {
     await expect(page.getByTestId("event-group-403")).toContainText("2 items");
   });
 
+  test("event detail supports individual and bulk soft delete plus excluded restore", async ({ page }) => {
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-done-proceed").click();
+    await page.getByTestId("tab-events").click();
+    await page.getByTestId("event-open-401").click();
+
+    await expect(page.getByTestId("event-media-exclude-901")).toBeVisible();
+    await page.getByTestId("event-media-exclude-901").click();
+    await expect(page.getByTestId("event-media-exclude-confirm-901")).toBeVisible();
+    await page.getByTestId("event-media-exclude-confirm-cancel-901").click();
+    await expect(page.getByTestId("event-media-item-901")).toBeVisible();
+
+    await page.getByTestId("event-media-exclude-901").click();
+    await page.getByTestId("event-media-exclude-confirm-yes-901").click();
+    await expect(page.getByTestId("status-pill")).toContainText("Item moved to recycle");
+    await expect(page.getByTestId("event-media-item-901")).toHaveCount(0);
+
+    await page.getByTestId("event-media-select-902").click();
+    await expect(page.getByTestId("event-exclude-selected")).toBeVisible();
+    await page.getByTestId("event-exclude-selected").click();
+    await expect(page.getByTestId("event-exclude-selected-confirmation")).toContainText("Move 1 items to recycle?");
+    await page.getByTestId("event-exclude-selected-confirm").click();
+    await expect(page.getByTestId("status-pill")).toContainText("1 items moved to recycle");
+    await expect(page.getByTestId("event-media-item-902")).toHaveCount(0);
+
+    await page.getByTestId("event-detail-back").click();
+    await expect(page.getByTestId("event-group-401")).toContainText("0 items");
+    await expect(page.getByTestId("event-delete-401")).toBeVisible();
+
+    await page.getByTestId("event-open-401").click();
+    await page.getByTestId("event-show-excluded").click();
+    await expect(page.getByTestId("event-media-item-901")).toHaveAttribute("data-muted", "true");
+    await expect(page.getByTestId("event-media-restore-901")).toBeVisible();
+    await page.getByTestId("event-media-restore-901").click();
+    await expect(page.getByTestId("status-pill")).toContainText("Item restored to group");
+    await expect(page.getByTestId("event-media-item-901")).toHaveCount(0);
+
+    await page.getByTestId("event-show-active").click();
+    await expect(page.getByTestId("event-media-item-901")).toBeVisible();
+    await page.getByTestId("event-detail-back").click();
+    await expect(page.getByTestId("event-group-401")).toContainText("1 items");
+  });
+
   test("saves settings sections without crashing", async ({ page }) => {
     await page.getByTestId("tab-settings").click();
     await expect(page.getByTestId("settings-section-directories")).toBeVisible();

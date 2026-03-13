@@ -118,8 +118,13 @@ export function deleteEventGroup(groupId: number) {
   return invokeCommand<void>("delete_event_group", { groupId, group_id: groupId });
 }
 
-export function getEventGroupItems(groupId: number) {
-  return invokeCommand<EventGroupItem[]>("get_event_group_items", { groupId, group_id: groupId });
+export function getEventGroupItems(groupId: number, showExcluded = false) {
+  return invokeCommand<EventGroupItem[]>("get_event_group_items", {
+    groupId,
+    group_id: groupId,
+    showExcluded,
+    show_excluded: showExcluded
+  });
 }
 
 export function getEventGroupMediaPreview(mediaItemId: number) {
@@ -164,6 +169,18 @@ export function restoreVideos(mediaItemIds: number[]) {
 
 export function completeVideoReviewAndRunGrouping() {
   return invokeCommand<void>("complete_video_review_and_run_grouping");
+}
+
+export function excludeMediaItem(mediaItemId: number) {
+  return invokeCommand<void>("exclude_media_item", { mediaItemId, media_item_id: mediaItemId });
+}
+
+export function restoreMediaItem(mediaItemId: number) {
+  return invokeCommand<void>("restore_media_item", { mediaItemId, media_item_id: mediaItemId });
+}
+
+export function excludeMediaItems(mediaItemIds: number[]) {
+  return invokeCommand<number>("exclude_media_items", { mediaItemIds, media_item_ids: mediaItemIds });
 }
 
 export function resetSession(deleteGeneratedFiles: boolean) {

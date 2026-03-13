@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use rusqlite::params;
 use std::path::{Path, PathBuf};
 
@@ -75,19 +75,53 @@ pub fn complete_video_review(conn: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-pub fn exclude_videos(conn: &rusqlite::Connection, root_output: &Path, media_item_ids: &[i64]) -> Result<usize> {
-    move_videos_between_statuses(conn, root_output, media_item_ids, "date_verified", "excluded", "recycle", "excluded")
-}
-
-pub fn restore_videos(conn: &rusqlite::Connection, root_output: &Path, media_item_ids: &[i64]) -> Result<usize> {
-    move_videos_between_statuses(conn, root_output, media_item_ids, "excluded", "date_verified", "staging", "restored")
-}
-
-fn move_videos_between_statuses(
-    conn: &rusqlite::Connection,
+pub fn exclude_media_items(
+    conn: &mut rusqlite::Connection,
     root_output: &Path,
     media_item_ids: &[i64],
-    from_status: &str,
+    allowed_from_statuses: &[&str],
+) -> Result<usize> {
+    move_media_between_statuses(
+        conn,
+        root_output,
+        media_item_ids,
+        allowed_from_statuses,
+        "excluded",
+        "recycle",
+        "excluded",
+    )
+}
+
+pub fn restore_media_items(
+    conn: &mut rusqlite::Connection,
+    root_output: &Path,
+    media_item_ids: &[i64],
+    restore_status: &str,
+) -> Result<usize> {
+    move_media_between_statuses(
+        conn,
+        root_output,
+        media_item_ids,
+        &["excluded"],
+        restore_status,
+        "staging",
+        "restored",
+    )
+}
+
+pub fn exclude_videos(conn: &mut rusqlite::Connection, root_output: &Path, media_item_ids: &[i64]) -> Result<usize> {
+    exclude_media_items(conn, root_output, media_item_ids, &["date_verified"])
+}
+
+pub fn restore_videos(conn: &mut rusqlite::Connection, root_output: &Path, media_item_ids: &[i64]) -> Result<usize> {
+    restore_media_items(conn, root_output, media_item_ids, "date_verified")
+}
+
+fn move_media_between_statuses(
+    conn: &mut rusqlite::Connection,
+    root_output: &Path,
+    media_item_ids: &[i64],
+    from_statuses: &[&str],
     to_status: &str,
     target_dir_name: &str,
     audit_action: &str,
@@ -97,11 +131,12 @@ fn move_videos_between_statuses(
     }
     let target_dir = root_output.join(target_dir_name);
     let _ = std::fs::create_dir_all(&target_dir);
-    let mut moved = 0_usize;
+
+    let mut operations: Vec<(i64, String, PathBuf, PathBuf)> = Vec::new();
     for id in media_item_ids {
-        let row = conn.query_row(
+        let (filename, current_path, status) = conn.query_row(
             "SELECT filename, COALESCE(current_path, ''), status
-             FROM media_items WHERE id=?1 AND mime_type LIKE 'video/%'",
+             FROM media_items WHERE id=?1",
             [id],
             |r| {
                 Ok((
@@ -110,24 +145,56 @@ fn move_videos_between_statuses(
                     r.get::<_, String>(2)?,
                 ))
             },
-        );
-        let Ok((filename, current_path, status)) = row else {
-            continue;
-        };
-        if status != from_status || current_path.trim().is_empty() {
-            continue;
+        )?;
+        if !from_statuses.iter().any(|allowed| status == *allowed) {
+            return Err(anyhow!("Item {id} is not in an excludable/restorable state."));
+        }
+        if current_path.trim().is_empty() {
+            return Err(anyhow!("Item {id} has no current path."));
         }
         let source = PathBuf::from(&current_path);
         if !source.exists() {
-            continue;
+            return Err(anyhow!("Item {id} file does not exist."));
         }
         let target = unique_target_path(&target_dir, &filename);
-        move_file(&source, &target)?;
-        conn.execute(
+        operations.push((*id, status, source, target));
+    }
+
+    let mut moved_pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (_id, _status, source, target) in &operations {
+        if let Err(err) = move_file(source, target) {
+            for (from, to) in moved_pairs.into_iter().rev() {
+                let _ = move_file(&to, &from);
+            }
+            return Err(err);
+        }
+        moved_pairs.push((source.clone(), target.clone()));
+    }
+
+    let mut touched_group_ids: Vec<i64> = Vec::new();
+    for (id, _, _, _) in &operations {
+        let group_id = conn
+            .query_row(
+                "SELECT event_group_id FROM media_items WHERE id=?1",
+                [id],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten();
+        if let Some(group_id) = group_id {
+            touched_group_ids.push(group_id);
+        }
+    }
+    touched_group_ids.sort_unstable();
+    touched_group_ids.dedup();
+
+    let tx = conn.transaction()?;
+    for (id, _status, source, target) in &operations {
+        tx.execute(
             "UPDATE media_items SET current_path=?1, status=?2, updated_at=CURRENT_TIMESTAMP WHERE id=?3",
             params![target.to_string_lossy().to_string(), to_status, id],
         )?;
-        conn.execute(
+        tx.execute(
             "INSERT INTO audit_log(media_item_id, action, source, new_value, details)
              VALUES(?1, ?2, 'user', ?3, ?4)",
             params![
@@ -137,9 +204,11 @@ fn move_videos_between_statuses(
                 format!("{{\"from\":\"{}\",\"to\":\"{}\"}}", source.to_string_lossy(), target.to_string_lossy())
             ],
         )?;
-        moved += 1;
     }
-    Ok(moved)
+
+    db::refresh_event_group_item_counts(&tx, touched_group_ids.as_slice())?;
+    tx.commit()?;
+    Ok(operations.len())
 }
 
 fn move_file(source: &Path, target: &Path) -> Result<()> {
@@ -198,7 +267,7 @@ mod tests {
     #[test]
     fn exclude_and_restore_moves_files_and_writes_audit_rows() {
         let db_path = temp_db_path();
-        let conn = init_db(&db_path).expect("db");
+        let mut conn = init_db(&db_path).expect("db");
         let root = std::env::temp_dir().join(format!("memoria-video-root-{}", rand::random::<u64>()));
         let staging = root.join("staging");
         let recycle = root.join("recycle");
@@ -214,7 +283,7 @@ mod tests {
         .expect("insert");
         let id = conn.last_insert_rowid();
 
-        let excluded = exclude_videos(&conn, &root, &[id]).expect("exclude");
+        let excluded = exclude_videos(&mut conn, &root, &[id]).expect("exclude");
         assert_eq!(excluded, 1);
         let (status, path): (String, String) = conn
             .query_row("SELECT status, current_path FROM media_items WHERE id=?1", [id], |r| {
@@ -224,7 +293,7 @@ mod tests {
         assert_eq!(status, "excluded");
         assert!(path.contains("recycle"));
 
-        let restored = restore_videos(&conn, &root, &[id]).expect("restore");
+        let restored = restore_videos(&mut conn, &root, &[id]).expect("restore");
         assert_eq!(restored, 1);
         let (status2, path2): (String, String) = conn
             .query_row("SELECT status, current_path FROM media_items WHERE id=?1", [id], |r| {
@@ -259,5 +328,43 @@ mod tests {
         complete_video_review(&conn).expect("complete");
         let state = video_phase_state(&conn).expect("state");
         assert_eq!(state, "complete");
+    }
+
+    #[test]
+    fn bulk_exclude_rollback_keeps_db_unchanged_on_partial_failure() {
+        let db_path = temp_db_path();
+        let mut conn = init_db(&db_path).expect("db");
+        let root = std::env::temp_dir().join(format!("memoria-video-rollback-{}", rand::random::<u64>()));
+        let staging = root.join("staging");
+        std::fs::create_dir_all(&staging).expect("staging");
+        let source_ok = staging.join("ok.jpg");
+        std::fs::write(&source_ok, b"ok").expect("ok file");
+        conn.execute(
+            "INSERT INTO event_groups(id, year, name, folder_name, item_count, user_approved) VALUES(1, 2026, 'Group', '2026 - Group', 0, 1)",
+            [],
+        )
+        .expect("group");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, mime_type, event_group_id)
+             VALUES(?1, ?2, ?3, 'grouped', 'image/jpeg', 1)",
+            params!["ok", "ok.jpg", source_ok.to_string_lossy().to_string()],
+        )
+        .expect("ok insert");
+        let ok_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, mime_type, event_group_id)
+             VALUES(?1, ?2, ?3, 'grouped', 'image/jpeg', 1)",
+            params!["missing", "missing.jpg", "C:\\missing\\missing.jpg"],
+        )
+        .expect("missing insert");
+        let missing_id = conn.last_insert_rowid();
+
+        let result = exclude_media_items(&mut conn, &root, &[ok_id, missing_id], &["grouped"]);
+        assert!(result.is_err());
+        let ok_status: String = conn
+            .query_row("SELECT status FROM media_items WHERE id=?1", [ok_id], |r| r.get(0))
+            .expect("ok status");
+        assert_eq!(ok_status, "grouped");
+        assert!(source_ok.exists());
     }
 }

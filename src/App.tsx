@@ -6,6 +6,8 @@ import {
   createEventGroup,
   createEventGroupAndMove,
   deleteEventGroup,
+  excludeMediaItem,
+  excludeMediaItems,
   excludeVideos,
   finalizeOrganization,
   getAppConfiguration,
@@ -22,6 +24,7 @@ import {
   renameEventGroup,
   runEventGrouping,
   restoreVideos,
+  restoreMediaItem,
   setAiTaskModel,
   setAnthropicKey,
   setOpenAiKey,
@@ -117,6 +120,7 @@ export function App() {
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupError, setNewGroupError] = useState("");
   const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
+  const [activeGroupShowExcluded, setActiveGroupShowExcluded] = useState(false);
   const [activeGroupItems, setActiveGroupItems] = useState<EventGroupItem[]>([]);
   const [selectedItemIds, setSelectedItemIds] = useState<number[]>([]);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
@@ -268,7 +272,7 @@ export function App() {
     if (!activeGroupId) {
       return;
     }
-    getEventGroupItems(activeGroupId)
+    getEventGroupItems(activeGroupId, activeGroupShowExcluded)
       .then((items) => {
         setActiveGroupItems(items);
         setSelectedItemIds([]);
@@ -277,7 +281,7 @@ export function App() {
       .catch((err) => {
         setMessage(`Loading group detail failed: ${String(err)}`);
       });
-  }, [activeGroupId]);
+  }, [activeGroupId, activeGroupShowExcluded]);
 
   useEffect(() => {
     if (!previewItem) {
@@ -365,7 +369,7 @@ export function App() {
         }
         await createEventGroupAndMove(eventMoveNewGroupName.trim(), selectedItemIds);
       }
-      const [nextGroups, nextItems] = await Promise.all([getEventGroups(), getEventGroupItems(activeGroupId)]);
+      const [nextGroups, nextItems] = await Promise.all([getEventGroups(), getEventGroupItems(activeGroupId, false)]);
       setGroups(nextGroups);
       setActiveGroupItems(nextItems);
       setSelectedItemIds([]);
@@ -559,6 +563,8 @@ export function App() {
             <EventGroupDetailView
               group={activeGroup}
               items={activeGroupItems}
+              showExcluded={activeGroupShowExcluded}
+              setShowExcluded={setActiveGroupShowExcluded}
               selectedItemIds={selectedItemIds}
               setSelectedItemIds={setSelectedItemIds}
               lastSelectedIndex={lastSelectedIndex}
@@ -566,6 +572,44 @@ export function App() {
               onBack={() => setActiveGroupId(null)}
               onOpenPreview={(item) => setPreviewItem(item)}
               onMoveSelected={openMoveDialog}
+              onExcludeItem={async (id) => {
+                await excludeMediaItem(id);
+                if (activeGroupId) {
+                  const [nextItems, nextGroups] = await Promise.all([
+                    getEventGroupItems(activeGroupId, activeGroupShowExcluded),
+                    getEventGroups()
+                  ]);
+                  setActiveGroupItems(nextItems);
+                  setGroups(nextGroups);
+                }
+                setMessage("Item moved to recycle");
+              }}
+              onBulkExclude={async (ids) => {
+                const moved = await excludeMediaItems(ids);
+                if (activeGroupId) {
+                  const [nextItems, nextGroups] = await Promise.all([
+                    getEventGroupItems(activeGroupId, activeGroupShowExcluded),
+                    getEventGroups()
+                  ]);
+                  setActiveGroupItems(nextItems);
+                  setGroups(nextGroups);
+                }
+                setSelectedItemIds([]);
+                setLastSelectedIndex(null);
+                setMessage(`${moved} items moved to recycle`);
+              }}
+              onRestoreItem={async (id) => {
+                await restoreMediaItem(id);
+                if (activeGroupId) {
+                  const [nextItems, nextGroups] = await Promise.all([
+                    getEventGroupItems(activeGroupId, activeGroupShowExcluded),
+                    getEventGroups()
+                  ]);
+                  setActiveGroupItems(nextItems);
+                  setGroups(nextGroups);
+                }
+                setMessage("Item restored to group");
+              }}
             />
           ) : (
             <>
@@ -622,7 +666,10 @@ export function App() {
                     key={group.id}
                     group={group}
                     allGroupNames={groups.map((entry) => entry.name)}
-                    onOpen={() => setActiveGroupId(group.id)}
+                    onOpen={() => {
+                      setActiveGroupShowExcluded(false);
+                      setActiveGroupId(group.id);
+                    }}
                     onRename={async (name) => {
                       await renameEventGroup(group.id, name);
                       await refreshAll();
@@ -1129,16 +1176,23 @@ function EventCard({
 function EventGroupDetailView({
   group,
   items,
+  showExcluded,
+  setShowExcluded,
   selectedItemIds,
   setSelectedItemIds,
   lastSelectedIndex,
   setLastSelectedIndex,
   onBack,
   onOpenPreview,
-  onMoveSelected
+  onMoveSelected,
+  onExcludeItem,
+  onBulkExclude,
+  onRestoreItem
 }: {
   group: EventGroup;
   items: EventGroupItem[];
+  showExcluded: boolean;
+  setShowExcluded: (next: boolean) => void;
   selectedItemIds: number[];
   setSelectedItemIds: (next: number[] | ((prev: number[]) => number[])) => void;
   lastSelectedIndex: number | null;
@@ -1146,11 +1200,15 @@ function EventGroupDetailView({
   onBack: () => void;
   onOpenPreview: (item: EventGroupItem) => void;
   onMoveSelected: () => void;
+  onExcludeItem: (id: number) => Promise<void>;
+  onBulkExclude: (ids: number[]) => Promise<void>;
+  onRestoreItem: (id: number) => Promise<void>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
   const [columnCount, setColumnCount] = useState(4);
   const [scrollHeight, setScrollHeight] = useState(500);
+  const [confirmBulkExclude, setConfirmBulkExclude] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1191,6 +1249,7 @@ function EventGroupDetailView({
   const selected = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
 
   function toggleSelection(index: number, shiftKey: boolean) {
+    if (showExcluded) return;
     const item = items[index];
     if (!item) return;
     if (shiftKey && lastSelectedIndex !== null) {
@@ -1223,8 +1282,33 @@ function EventGroupDetailView({
         </div>
         <div className="row">
           <button
+            data-testid="event-show-active"
+            className={showExcluded ? "secondaryBtn" : "primaryBtn"}
+            onClick={() => {
+              setShowExcluded(false);
+              setConfirmBulkExclude(false);
+            }}
+          >
+            Show active
+          </button>
+          <button
+            data-testid="event-show-excluded"
+            className={showExcluded ? "primaryBtn" : "secondaryBtn"}
+            onClick={() => {
+              setShowExcluded(true);
+              setSelectedItemIds([]);
+              setLastSelectedIndex(null);
+              setConfirmBulkExclude(false);
+            }}
+          >
+            Show excluded
+          </button>
+        </div>
+        <div className="row">
+          <button
             data-testid="event-select-all"
             className="secondaryBtn"
+            disabled={showExcluded}
             onClick={() => setSelectedItemIds(items.map((item) => item.id))}
           >
             Select All
@@ -1232,13 +1316,14 @@ function EventGroupDetailView({
           <button
             data-testid="event-deselect-all"
             className="secondaryBtn"
+            disabled={showExcluded}
             onClick={() => setSelectedItemIds([])}
           >
             Deselect All
           </button>
         </div>
       </div>
-      {selectedItemIds.length > 0 && (
+      {selectedItemIds.length > 0 && !showExcluded && (
         <div className="item eventSelectionToolbar" data-testid="event-selection-toolbar">
           <strong>{selectedItemIds.length} selected</strong>
           <button
@@ -1248,8 +1333,39 @@ function EventGroupDetailView({
           >
             Move to Group
           </button>
+          <button
+            data-testid="event-exclude-selected"
+            className="secondaryBtn"
+            onClick={() => setConfirmBulkExclude(true)}
+          >
+            Exclude Selected
+          </button>
         </div>
       )}
+      {confirmBulkExclude && selectedItemIds.length > 0 && !showExcluded ? (
+        <div className="item" data-testid="event-exclude-selected-confirmation">
+          <div className="danger">Move {selectedItemIds.length} items to recycle? This will remove them from this group.</div>
+          <div className="row">
+            <button
+              data-testid="event-exclude-selected-confirm"
+              className="secondaryBtn"
+              onClick={() => {
+                void onBulkExclude(selectedItemIds);
+                setConfirmBulkExclude(false);
+              }}
+            >
+              Confirm
+            </button>
+            <button
+              data-testid="event-exclude-selected-cancel"
+              className="secondaryBtn"
+              onClick={() => setConfirmBulkExclude(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div ref={scrollWrapperRef} style={{ flex: 1 }}>
         <div
           className="eventVirtualGridViewport"
@@ -1304,9 +1420,13 @@ function EventGroupDetailView({
                     <EventThumbCard
                       key={item.id}
                       item={item}
+                      muted={showExcluded}
+                      showExcluded={showExcluded}
                       selected={isSelected}
                       onToggle={(shiftKey) => toggleSelection(index, shiftKey)}
                       onOpenPreview={() => onOpenPreview(item)}
+                      onExclude={async () => onExcludeItem(item.id)}
+                      onRestore={async () => onRestoreItem(item.id)}
                       style={{ flex: "1 1 0", minWidth: 0 }}
                     />
                   );
@@ -1332,18 +1452,27 @@ function EventGroupDetailView({
 
 function EventThumbCard({
   item,
+  muted,
+  showExcluded,
   selected,
   onToggle,
   onOpenPreview,
+  onExclude,
+  onRestore,
   style
 }: {
   item: EventGroupItem;
+  muted: boolean;
+  showExcluded: boolean;
   selected: boolean;
   onToggle: (shiftKey: boolean) => void;
   onOpenPreview: () => void;
+  onExclude: () => Promise<void>;
+  onRestore: () => Promise<void>;
   style?: CSSProperties;
 }) {
   const [thumbSrc, setThumbSrc] = useState("");
+  const [confirmExclude, setConfirmExclude] = useState(false);
   useEffect(() => {
     let cancelled = false;
     getDateMediaThumbnail(item.id)
@@ -1366,13 +1495,15 @@ function EventThumbCard({
     <div
       className={selected ? "eventThumbCard selected" : "eventThumbCard"}
       data-testid={`event-media-item-${item.id}`}
+      data-muted={muted ? "true" : "false"}
       data-thumbnail-card
       style={{
         ...style,
         minHeight: ITEM_HEIGHT - CARD_GAP,
         display: "flex",
         flexDirection: "column",
-        overflow: "visible"
+        overflow: "visible",
+        opacity: muted ? 0.65 : 1
       }}
     >
       <button
@@ -1410,14 +1541,62 @@ function EventThumbCard({
           flexShrink: 0
         }}
       >
-        <button
-          className="eventThumbSelectButton"
-          data-testid={`event-media-select-${item.id}`}
-          onClick={(event) => onToggle(event.shiftKey)}
-          style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT }}
-        >
-          {selected ? "Selected" : "Select"}
-        </button>
+        {showExcluded ? (
+          <button
+            className="secondaryBtn"
+            data-testid={`event-media-restore-${item.id}`}
+            onClick={() => {
+              void onRestore();
+            }}
+            style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT }}
+          >
+            Restore
+          </button>
+        ) : confirmExclude ? (
+          <div data-testid={`event-media-exclude-confirm-${item.id}`}>
+            <div className="danger" style={{ fontSize: 11, marginBottom: 6 }}>Move this item to recycle?</div>
+            <div className="row" style={{ gap: 6 }}>
+              <button
+                data-testid={`event-media-exclude-confirm-yes-${item.id}`}
+                className="secondaryBtn"
+                onClick={() => {
+                  void onExclude();
+                  setConfirmExclude(false);
+                }}
+                style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT }}
+              >
+                Confirm
+              </button>
+              <button
+                data-testid={`event-media-exclude-confirm-cancel-${item.id}`}
+                className="secondaryBtn"
+                onClick={() => setConfirmExclude(false)}
+                style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="row" style={{ gap: 6 }}>
+            <button
+              className="eventThumbSelectButton"
+              data-testid={`event-media-select-${item.id}`}
+              onClick={(event) => onToggle(event.shiftKey)}
+              style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT }}
+            >
+              {selected ? "Selected" : "Select"}
+            </button>
+            <button
+              className="secondaryBtn"
+              data-testid={`event-media-exclude-${item.id}`}
+              onClick={() => setConfirmExclude(true)}
+              style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT, borderColor: "#b91c1c", color: "#b91c1c" }}
+            >
+              Exclude
+            </button>
+          </div>
+        )}
       </div>
       {selected ? <div className="eventThumbCheckmark">✓</div> : null}
     </div>

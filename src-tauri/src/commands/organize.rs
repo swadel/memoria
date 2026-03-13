@@ -49,9 +49,9 @@ pub fn get_event_groups(state: State<'_, AppState>) -> Result<Vec<EventGroupDto>
 }
 
 #[tauri::command]
-pub fn get_event_group_items(group_id: i64, state: State<'_, AppState>) -> Result<Vec<EventGroupItemDto>, String> {
+pub fn get_event_group_items(group_id: i64, show_excluded: bool, state: State<'_, AppState>) -> Result<Vec<EventGroupItemDto>, String> {
     let conn = state.open_conn().map_err(|e| e.to_string())?;
-    db::get_event_group_items(&conn, group_id).map_err(|e| e.to_string())
+    db::get_event_group_items(&conn, group_id, show_excluded).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -228,7 +228,7 @@ fn create_event_group_conn(
 
 fn delete_event_group_conn(conn: &rusqlite::Connection, group_id: i64) -> Result<()> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE event_group_id=?1",
+        "SELECT COUNT(*) FROM media_items WHERE event_group_id=?1 AND status != 'excluded'",
         [group_id],
         |r| r.get(0),
     )?;

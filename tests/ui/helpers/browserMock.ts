@@ -26,6 +26,7 @@ type EventGroupItem = {
   currentPath: string;
   dateTaken: string | null;
   mimeType: string;
+  status?: string;
 };
 
 type VideoReviewItem = {
@@ -92,7 +93,8 @@ function buildState(profile: BrowserFixtureProfile) {
                     filename: `ski_${String(index + 1).padStart(3, "0")}.png`,
                     currentPath: `C:\\fixture\\output\\staging\\ski_${String(index + 1).padStart(3, "0")}.png`,
                     dateTaken: `2026-01-${String(11 + index).padStart(2, "0")}`,
-                    mimeType: "image/png"
+                    mimeType: "image/png",
+                    status: "grouped"
                   };
                 })
               : [
@@ -101,14 +103,16 @@ function buildState(profile: BrowserFixtureProfile) {
                     filename: "ski_001.png",
                     currentPath: "C:\\fixture\\output\\staging\\ski_001.png",
                     dateTaken: "2026-01-11",
-                    mimeType: "image/png"
+                    mimeType: "image/png",
+                    status: "grouped"
                   },
                   {
                     id: 902,
                     filename: "ski_002.png",
                     currentPath: "C:\\fixture\\output\\staging\\ski_002.png",
                     dateTaken: "2026-01-12",
-                    mimeType: "image/png"
+                    mimeType: "image/png",
+                    status: "grouped"
                   }
                 ]
         };
@@ -231,7 +235,11 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               return Promise.resolve(state.eventGroups);
             case "get_event_group_items": {
               const groupId = Number(args?.groupId ?? args?.group_id ?? -1);
-              return Promise.resolve(state.eventGroupItemsByGroupId[groupId] ?? []);
+              const showExcluded = Boolean(args?.showExcluded ?? args?.show_excluded);
+              const items = state.eventGroupItemsByGroupId[groupId] ?? [];
+              return Promise.resolve(
+                items.filter((item: EventGroupItem) => (showExcluded ? item.status === "excluded" : item.status !== "excluded"))
+              );
             }
             case "get_event_group_media_preview":
               return Promise.resolve(tinyPngDataUrl);
@@ -277,6 +285,39 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               state.stats.videoExcluded = state.videoItems.filter((item: VideoReviewItem) => item.status === "excluded").length;
               state.stats.videoFlagged = state.videoItems.filter((item: VideoReviewItem) => item.status === "date_verified" && (item.fileSizeBytes <= 5 * 1024 * 1024 || item.durationSecs <= 10)).length;
               state.stats.videoUnreviewedFlagged = state.stats.videoFlagged;
+              return Promise.resolve(ids.length);
+            }
+            case "exclude_media_item": {
+              const id = Number(args?.mediaItemId ?? args?.media_item_id ?? -1);
+              for (const group of state.eventGroups as EventGroup[]) {
+                const items = state.eventGroupItemsByGroupId[group.id] ?? [];
+                for (const item of items) {
+                  if (item.id === id) item.status = "excluded";
+                }
+                group.itemCount = items.filter((item: EventGroupItem) => item.status !== "excluded").length;
+              }
+              return Promise.resolve();
+            }
+            case "restore_media_item": {
+              const id = Number(args?.mediaItemId ?? args?.media_item_id ?? -1);
+              for (const group of state.eventGroups as EventGroup[]) {
+                const items = state.eventGroupItemsByGroupId[group.id] ?? [];
+                for (const item of items) {
+                  if (item.id === id) item.status = "grouped";
+                }
+                group.itemCount = items.filter((item: EventGroupItem) => item.status !== "excluded").length;
+              }
+              return Promise.resolve();
+            }
+            case "exclude_media_items": {
+              const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
+              for (const group of state.eventGroups as EventGroup[]) {
+                const items = state.eventGroupItemsByGroupId[group.id] ?? [];
+                for (const item of items) {
+                  if (ids.includes(item.id)) item.status = "excluded";
+                }
+                group.itemCount = items.filter((item: EventGroupItem) => item.status !== "excluded").length;
+              }
               return Promise.resolve(ids.length);
             }
             case "reset_session":
@@ -368,12 +409,15 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                   return true;
                 });
                 state.eventGroupItemsByGroupId[group.id] = retained;
-                group.itemCount = retained.length;
+                group.itemCount = retained.filter((item: EventGroupItem) => item.status !== "excluded").length;
               }
               state.eventGroupItemsByGroupId[destinationGroupId] = [...destinationItems, ...moving];
               state.eventGroups = state.eventGroups.map((group: EventGroup) =>
                 group.id === destinationGroupId
-                  ? { ...group, itemCount: state.eventGroupItemsByGroupId[destinationGroupId].length }
+                  ? {
+                      ...group,
+                      itemCount: state.eventGroupItemsByGroupId[destinationGroupId].filter((item: EventGroupItem) => item.status !== "excluded").length
+                    }
                   : group
               );
               return Promise.resolve();
@@ -409,9 +453,9 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                   return true;
                 });
                 state.eventGroupItemsByGroupId[source.id] = retained;
-                source.itemCount = retained.length;
+                source.itemCount = retained.filter((item: EventGroupItem) => item.status !== "excluded").length;
               }
-              group.itemCount = destinationItems.length;
+              group.itemCount = destinationItems.filter((item: EventGroupItem) => item.status !== "excluded").length;
               return Promise.resolve(group);
             }
             default:
