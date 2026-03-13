@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-type BrowserFixtureProfile = "all" | "settings-only";
+type BrowserFixtureProfile = "all" | "settings-only" | "responsive";
 
 type DateEstimate = {
   mediaItemId: number;
@@ -60,7 +60,7 @@ function buildState(profile: BrowserFixtureProfile) {
             year: 2026,
             name: "Ski Trip",
             folderName: "2026 - Ski Trip",
-            itemCount: 2,
+            itemCount: profile === "responsive" ? 11 : 2,
             userApproved: false
           }
         ];
@@ -69,22 +69,34 @@ function buildState(profile: BrowserFixtureProfile) {
     profile === "settings-only"
       ? {}
       : {
-          401: [
-            {
-              id: 901,
-              filename: "ski_001.png",
-              currentPath: "C:\\fixture\\output\\staging\\ski_001.png",
-              dateTaken: "2026-01-11",
-              mimeType: "image/png"
-            },
-            {
-              id: 902,
-              filename: "ski_002.png",
-              currentPath: "C:\\fixture\\output\\staging\\ski_002.png",
-              dateTaken: "2026-01-12",
-              mimeType: "image/png"
-            }
-          ]
+          401:
+            profile === "responsive"
+              ? Array.from({ length: 11 }).map((_, index) => {
+                  const id = 901 + index;
+                  return {
+                    id,
+                    filename: `ski_${String(index + 1).padStart(3, "0")}.png`,
+                    currentPath: `C:\\fixture\\output\\staging\\ski_${String(index + 1).padStart(3, "0")}.png`,
+                    dateTaken: `2026-01-${String(11 + index).padStart(2, "0")}`,
+                    mimeType: "image/png"
+                  };
+                })
+              : [
+                  {
+                    id: 901,
+                    filename: "ski_001.png",
+                    currentPath: "C:\\fixture\\output\\staging\\ski_001.png",
+                    dateTaken: "2026-01-11",
+                    mimeType: "image/png"
+                  },
+                  {
+                    id: 902,
+                    filename: "ski_002.png",
+                    currentPath: "C:\\fixture\\output\\staging\\ski_002.png",
+                    dateTaken: "2026-01-12",
+                    mimeType: "image/png"
+                  }
+                ]
         };
 
   const stats = {

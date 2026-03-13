@@ -136,4 +136,94 @@ test.describe("Memoria browser UI smoke", () => {
     await expect(page.getByTestId("status-pill")).toContainText("Removed 3 generated directories");
     await expect(page.getByTestId("stat-total")).toContainText("0");
   });
+
+  test("event detail grid recalculates responsive columns and row counts", async ({ page }) => {
+    await installBrowserApiMock(page, "responsive");
+    await page.goto("/");
+    await page.getByTestId("tab-events").click();
+    await page.getByTestId("event-open-401").click();
+    await expect(page.getByTestId("event-group-detail-view")).toBeVisible();
+
+    const grid = page.getByTestId("event-virtual-grid");
+    const cases = [{ width: 800 }, { width: 1280 }, { width: 1440 }, { width: 1920 }];
+    const observedColumns: number[] = [];
+
+    for (const testCase of cases) {
+      await page.setViewportSize({ width: testCase.width + 200, height: 980 });
+      await grid.evaluate((el, width) => {
+        (el as HTMLElement).style.width = `${width}px`;
+      }, testCase.width);
+
+      const columns = Number(await grid.getAttribute("data-column-count"));
+      const rows = Number(await grid.getAttribute("data-row-count"));
+      expect(columns).toBeGreaterThan(0);
+      expect(rows).toBe(Math.ceil(11 / columns));
+      observedColumns.push(columns);
+
+      await grid.evaluate((el) => {
+        const viewport = el as HTMLElement;
+        viewport.scrollTop = viewport.scrollHeight;
+      });
+      await page.waitForTimeout(50);
+
+      const emptyCells = await page.getByTestId("event-empty-slot").count();
+      if (11 % columns !== 0) {
+        expect(emptyCells).toBeGreaterThan(0);
+      }
+    }
+    expect(new Set(observedColumns).size).toBeGreaterThan(1);
+  });
+
+  test("app layout avoids horizontal overflow at supported widths", async ({ page }) => {
+    const widths = [800, 1280, 1440, 1920];
+
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 920 });
+      await page.goto("/");
+
+      for (const tabId of ["tab-dashboard", "tab-dates", "tab-events", "tab-settings"]) {
+        await page.getByTestId(tabId).click();
+        const hasHorizontalOverflow = await page.evaluate(() => {
+          const root = document.documentElement;
+          return root.scrollWidth > root.clientWidth;
+        });
+        expect(hasHorizontalOverflow).toBeFalsy();
+      }
+    }
+  });
+
+  test("event group review grid expands card width with window size", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("tab-events").click();
+    const grid = page.getByTestId("event-groups-review-grid");
+
+    await page.setViewportSize({ width: 800, height: 920 });
+    const narrowColumns = await grid.evaluate((el) => {
+      const template = window.getComputedStyle(el).gridTemplateColumns.trim();
+      return template ? template.split(/\s+/).length : 1;
+    });
+
+    await page.setViewportSize({ width: 1920, height: 920 });
+    await expect(page.getByTestId("event-add-group-button")).toBeVisible();
+    const wideColumns = await grid.evaluate((el) => {
+      const template = window.getComputedStyle(el).gridTemplateColumns.trim();
+      return template ? template.split(/\s+/).length : 1;
+    });
+
+    expect(wideColumns).toBeGreaterThanOrEqual(narrowColumns);
+  });
+
+  test("date approval preview scales responsively with max width", async ({ page }) => {
+    await page.getByTestId("tab-dates").click();
+    const thumb = page.getByTestId("date-thumb-301");
+
+    await page.setViewportSize({ width: 800, height: 920 });
+    const narrow = await thumb.evaluate((el) => el.getBoundingClientRect().width);
+
+    await page.setViewportSize({ width: 1920, height: 920 });
+    const wide = await thumb.evaluate((el) => el.getBoundingClientRect().width);
+
+    expect(wide).toBeGreaterThan(narrow);
+    expect(wide).toBeLessThanOrEqual(600);
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   applyDateApproval,
@@ -27,6 +27,12 @@ import {
   resetSession,
   type ToolHealth
 } from "./lib/api";
+import {
+  MIN_ITEM_WIDTH,
+  calculateColumnCount,
+  calculateEmptySlotsInRow,
+  calculateRowCount
+} from "./lib/responsiveGrid";
 import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem } from "./types";
 
 type Tab = "dashboard" | "dates" | "events" | "settings";
@@ -429,7 +435,7 @@ export function App() {
       {tab === "dates" && (
         <div className="card" data-testid="date-approval-card">
           <h3>Date Metadata Approval</h3>
-          <div className="grid">
+          <div className="dateApprovalGrid">
             {dateItems.map((item) => (
               <DateCard
                 key={item.mediaItemId}
@@ -459,7 +465,6 @@ export function App() {
           {activeGroup ? (
             <EventGroupDetailView
               group={activeGroup}
-              groups={groups}
               items={activeGroupItems}
               selectedItemIds={selectedItemIds}
               setSelectedItemIds={setSelectedItemIds}
@@ -518,7 +523,7 @@ export function App() {
                   ) : null}
                 </div>
               )}
-              <div className="grid">
+              <div className="eventGroupsGrid" data-testid="event-groups-review-grid">
                 {groups.map((group) => (
                   <EventCard
                     key={group.id}
@@ -583,7 +588,7 @@ export function App() {
               <input
                 id="settings-working-directory"
                 data-testid="settings-working-directory"
-                style={{ minWidth: 320 }}
+                className="responsiveInput"
                 placeholder="C:\\Memoria\\inbox"
                 value={workingDirectory}
                 onChange={(e) => setWorkingDirectoryState(e.target.value)}
@@ -594,7 +599,7 @@ export function App() {
               <input
                 id="settings-output-directory"
                 data-testid="settings-output-directory"
-                style={{ minWidth: 320 }}
+                className="responsiveInput"
                 placeholder="C:\\Memoria"
                 value={outputDirectory}
                 onChange={(e) => setOutputDirectoryState(e.target.value)}
@@ -626,7 +631,7 @@ export function App() {
               id="settings-openai-key"
               data-testid="settings-openai-key"
               type="password"
-              style={{ minWidth: 420 }}
+              className="responsiveInput"
               placeholder="OpenAI API Key"
               value={openAiKey}
               onChange={(e) => setOpenAiKey(e.target.value)}
@@ -654,7 +659,7 @@ export function App() {
               id="settings-anthropic-key"
               data-testid="settings-anthropic-key"
               type="password"
-              style={{ minWidth: 420 }}
+              className="responsiveInput"
               placeholder="Anthropic API Key"
               value={anthropicKey}
               onChange={(e) => setAnthropicKeyState(e.target.value)}
@@ -891,7 +896,7 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
   }
 
   return (
-    <div className="item" data-testid={`date-item-${item.mediaItemId}`}>
+    <div className="item dateItemCard" data-testid={`date-item-${item.mediaItemId}`}>
       <img
         className="dateThumb"
         data-testid={`date-thumb-${item.mediaItemId}`}
@@ -905,7 +910,7 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
           }
         }}
       />
-      <strong>{item.filename}</strong>
+      <strong className="truncateOneLine">{item.filename}</strong>
       <div className="muted">Current: {item.currentDate ?? "(missing)"}</div>
       <div className="muted">AI: {item.aiDate ?? "(none)"} ({Math.round(item.confidence * 100)}%)</div>
       <div className="muted">{item.reasoning}</div>
@@ -1030,7 +1035,6 @@ function EventCard({
 
 function EventGroupDetailView({
   group,
-  groups,
   items,
   selectedItemIds,
   setSelectedItemIds,
@@ -1041,7 +1045,6 @@ function EventGroupDetailView({
   onMoveSelected
 }: {
   group: EventGroup;
-  groups: EventGroup[];
   items: EventGroupItem[];
   selectedItemIds: number[];
   setSelectedItemIds: (next: number[] | ((prev: number[]) => number[])) => void;
@@ -1051,18 +1054,34 @@ function EventGroupDetailView({
   onOpenPreview: (item: EventGroupItem) => void;
   onMoveSelected: () => void;
 }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const columns = 4;
-  const rowHeight = 260;
-  const rows = Math.ceil(items.length / columns);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [columnCount, setColumnCount] = useState(4);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const width = entry.contentRect.width;
+        const cols = calculateColumnCount(width, MIN_ITEM_WIDTH);
+        setColumnCount(cols);
+      }
+    });
+
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const rowCount = calculateRowCount(items.length, columnCount);
+
   const rowVirtualizer = useVirtualizer({
-    count: rows,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => rowHeight,
-    overscan: 5
+    count: rowCount,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => MIN_ITEM_WIDTH + 60,
+    overscan: 3
   });
   const selected = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
-  const selectableGroups = groups.filter((entry) => entry.id !== group.id);
 
   function toggleSelection(index: number, shiftKey: boolean) {
     const item = items[index];
@@ -1124,16 +1143,32 @@ function EventGroupDetailView({
           </button>
         </div>
       )}
-      <div className="eventVirtualGridViewport" ref={scrollRef} data-testid="event-virtual-grid">
+      <div
+        className="eventVirtualGridViewport"
+        ref={containerRef}
+        data-testid="event-virtual-grid"
+        data-column-count={columnCount}
+        data-row-count={rowCount}
+      >
         <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-            const startIndex = virtualRow.index * columns;
-            const rowItems = items.slice(startIndex, startIndex + columns);
+            const startIndex = virtualRow.index * columnCount;
+            const rowItems = items.slice(startIndex, startIndex + columnCount);
+            const emptySlotCount = calculateEmptySlotsInRow(rowItems.length, columnCount);
             return (
               <div
                 key={virtualRow.key}
+                data-testid={`event-virtual-row-${virtualRow.index}`}
                 className="eventVirtualRow"
-                style={{ transform: `translateY(${virtualRow.start}px)` }}
+                style={{
+                  position: "absolute",
+                  top: virtualRow.start,
+                  left: 0,
+                  right: 0,
+                  display: "flex",
+                  gap: "8px",
+                  padding: "0 8px"
+                }}
               >
                 {rowItems.map((item, offset) => {
                   const index = startIndex + offset;
@@ -1145,9 +1180,19 @@ function EventGroupDetailView({
                       selected={isSelected}
                       onToggle={(shiftKey) => toggleSelection(index, shiftKey)}
                       onOpenPreview={() => onOpenPreview(item)}
+                      style={{ flex: "1 1 0", minWidth: 0 }}
                     />
                   );
                 })}
+                {emptySlotCount > 0
+                  ? Array.from({ length: emptySlotCount }).map((_, index) => (
+                      <div
+                        key={`empty-${virtualRow.index}-${index}`}
+                        data-testid="event-empty-slot"
+                        style={{ flex: "1 1 0", minWidth: 0 }}
+                      />
+                    ))
+                  : null}
               </div>
             );
           })}
@@ -1161,12 +1206,14 @@ function EventThumbCard({
   item,
   selected,
   onToggle,
-  onOpenPreview
+  onOpenPreview,
+  style
 }: {
   item: EventGroupItem;
   selected: boolean;
   onToggle: (shiftKey: boolean) => void;
   onOpenPreview: () => void;
+  style?: CSSProperties;
 }) {
   const [thumbSrc, setThumbSrc] = useState("");
   useEffect(() => {
@@ -1188,14 +1235,11 @@ function EventThumbCard({
   }, [item.id, item.filename]);
 
   return (
-    <div className={selected ? "eventThumbCard selected" : "eventThumbCard"} data-testid={`event-media-item-${item.id}`}>
-      <button
-        className="eventThumbSelectButton"
-        data-testid={`event-media-select-${item.id}`}
-        onClick={(event) => onToggle(event.shiftKey)}
-      >
-        {selected ? "Selected" : "Select"}
-      </button>
+    <div
+      className={selected ? "eventThumbCard selected" : "eventThumbCard"}
+      data-testid={`event-media-item-${item.id}`}
+      style={style}
+    >
       <button
         className="eventThumbPreviewButton"
         data-testid={`event-media-preview-${item.id}`}
@@ -1204,9 +1248,16 @@ function EventThumbCard({
         <img className="eventThumbImage" src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)} alt={item.filename} />
       </button>
       <div className="eventThumbMeta">
-        <strong>{item.filename}</strong>
-        <div className="muted">{item.dateTaken ?? "(missing date)"}</div>
+        <strong className="truncateOneLine">{item.filename}</strong>
+        <div className="muted truncateOneLine">{item.dateTaken ?? "(missing date)"}</div>
       </div>
+      <button
+        className="eventThumbSelectButton"
+        data-testid={`event-media-select-${item.id}`}
+        onClick={(event) => onToggle(event.shiftKey)}
+      >
+        {selected ? "Selected" : "Select"}
+      </button>
       {selected ? <div className="eventThumbCheckmark">✓</div> : null}
     </div>
   );
@@ -1244,7 +1295,7 @@ function ModelSelector({
       <input
         id={modelId}
         data-testid={`model-name-${testPrefix}`}
-        style={{ minWidth: 180 }}
+        className="responsiveInput"
         value={value.model}
         onChange={(e) => onChange({ ...value, model: e.target.value })}
         placeholder="Model name"

@@ -12,6 +12,7 @@
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test": "npm run lint && npm run test:rust",
+    "test:unit:ui": "vitest run src/lib/responsiveGrid.test.ts",
     "test:ui": "playwright test",
     "test:ui:browser": "playwright test --project=browser-chromium",
     "test:ui:desktop": "playwright test --project=desktop-windows",
@@ -35,6 +36,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^4.1.0"
   }
 }
