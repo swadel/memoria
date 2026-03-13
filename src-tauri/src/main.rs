@@ -100,6 +100,11 @@ fn task_model_from_settings(
 }
 
 fn app_dir() -> Result<PathBuf> {
+    if let Ok(override_dir) = std::env::var("MEMORIA_APP_DIR") {
+        let path = PathBuf::from(override_dir);
+        std::fs::create_dir_all(&path)?;
+        return Ok(path);
+    }
     let base = std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
@@ -147,12 +152,73 @@ pub fn run() {
             commands::organize::run_event_grouping,
             commands::organize::get_event_groups,
             commands::organize::rename_event_group,
-            commands::organize::finalize_organization
+            commands::organize::finalize_organization,
+            commands::testing::seed_test_fixture
         ])
         .run(tauri::generate_context!())
         .expect("error while running memoria");
 }
 
 fn main() {
+    if handle_cli_fixture_seed() {
+        return;
+    }
     run();
+}
+
+fn handle_cli_fixture_seed() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) != Some("--seed-fixture") {
+        return false;
+    }
+    let profile = args
+        .get(2)
+        .map(|s| s.as_str())
+        .unwrap_or("all")
+        .to_string();
+    let mut media_root: Option<PathBuf> = None;
+    let mut output_root: Option<PathBuf> = None;
+    let mut idx = 3;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--media-root" => {
+                if let Some(v) = args.get(idx + 1) {
+                    media_root = Some(PathBuf::from(v));
+                    idx += 1;
+                }
+            }
+            "--output-root" => {
+                if let Some(v) = args.get(idx + 1) {
+                    output_root = Some(PathBuf::from(v));
+                    idx += 1;
+                }
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+
+    let result = (|| -> Result<services::test_fixtures::FixtureSeedSummary> {
+        let base_dir = app_dir()?;
+        let db_path = db_path(&base_dir);
+        let conn = db::init_db(&db_path)?;
+        let (default_media, default_output) = services::test_fixtures::default_fixture_paths(&base_dir);
+        let media = media_root.unwrap_or(default_media);
+        let output = output_root.unwrap_or(default_output);
+        services::test_fixtures::seed_fixture(&conn, profile.as_str(), &media, &output)
+    })();
+
+    match result {
+        Ok(summary) => {
+            println!(
+                "{}",
+                serde_json::to_string(&summary).unwrap_or_else(|_| "{\"ok\":true}".to_string())
+            );
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+    }
 }

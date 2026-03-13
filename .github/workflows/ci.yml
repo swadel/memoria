@@ -94,3 +94,90 @@ jobs:
 
       - name: Rust tests (includes review-rule and duplicate workflow tests)
         run: npm run test:rust
+
+  ui-browser:
+    needs: [lint, frontend-build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright (Chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser UI tests
+        run: npm run test:ui:browser
+
+      - name: Upload browser Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-browser-report
+          path: |
+            playwright-report
+            test-results
+
+  ui-desktop-windows:
+    needs: [lint, rust-tests]
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare resource placeholders (Windows)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor | Out-Null
+          New-Item -ItemType File -Force -Path vendor/exiftool.exe | Out-Null
+          New-Item -ItemType File -Force -Path vendor/ffmpeg.exe | Out-Null
+          New-Item -ItemType Directory -Force -Path src-tauri/icons | Out-Null
+          if (!(Test-Path src-tauri/icons/icon.ico)) {
+            Add-Type -AssemblyName System.Drawing
+            $bmp = New-Object System.Drawing.Bitmap 32,32
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.Clear([System.Drawing.Color]::FromArgb(255, 240, 240, 240))
+            $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+            $fs = [System.IO.File]::Open("src-tauri/icons/icon.ico", [System.IO.FileMode]::Create)
+            $icon.Save($fs)
+            $fs.Close()
+            $g.Dispose()
+            $bmp.Dispose()
+          }
+
+      - name: Install Playwright (Chromium)
+        run: npx playwright install chromium
+
+      - name: Run desktop UI tests
+        run: npm run test:ui:desktop
+
+      - name: Upload desktop Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-desktop-report
+          path: |
+            playwright-report
+            test-results

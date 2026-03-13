@@ -36,6 +36,9 @@ const DEFAULT_STATS: DashboardStats = {
   errors: 0
 };
 
+const POLL_INTERVAL_MS = Number(import.meta.env.VITE_REFRESH_INTERVAL_MS ?? "3000");
+const DISABLE_UI_POLLING = import.meta.env.VITE_E2E_DISABLE_POLLING === "1";
+
 export function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [stats, setStats] = useState<DashboardStats>(DEFAULT_STATS);
@@ -91,9 +94,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (DISABLE_UI_POLLING) {
+      return;
+    }
     const timer = setInterval(() => {
       refreshAll().catch(() => undefined);
-    }, 3000);
+    }, Math.max(POLL_INTERVAL_MS, 500));
     return () => clearInterval(timer);
   }, []);
 
@@ -302,78 +308,99 @@ export function App() {
   );
 
   return (
-    <div className="layout">
+    <div className="layout" data-testid="layout-root">
       <div className="topbar">
         <div>
           <h1 className="title">Memoria</h1>
           <p className="subtitle">Local Media Organizer</p>
         </div>
-        <div className="statusPill">{message || "Ready"}</div>
+        <div className="statusPill" data-testid="status-pill">
+          {message || "Ready"}
+        </div>
       </div>
-      <div className="tabStrip">
-        <button className={tab === "dashboard" ? "tab active" : "tab"} onClick={() => setTab("dashboard")}>
+      <div className="tabStrip" data-testid="tab-strip">
+        <button
+          data-testid="tab-dashboard"
+          className={tab === "dashboard" ? "tab active" : "tab"}
+          onClick={() => setTab("dashboard")}
+        >
           Dashboard
         </button>
-        <button className={tab === "review" ? "tab active" : "tab"} onClick={() => setTab("review")}>
+        <button data-testid="tab-review" className={tab === "review" ? "tab active" : "tab"} onClick={() => setTab("review")}>
           Review Queue
         </button>
-        <button className={tab === "dates" ? "tab active" : "tab"} onClick={() => setTab("dates")}>
+        <button data-testid="tab-dates" className={tab === "dates" ? "tab active" : "tab"} onClick={() => setTab("dates")}>
           Date Approval
         </button>
-        <button className={tab === "events" ? "tab active" : "tab"} onClick={() => setTab("events")}>
+        <button data-testid="tab-events" className={tab === "events" ? "tab active" : "tab"} onClick={() => setTab("events")}>
           Event Groups
         </button>
-        <button className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>
+        <button
+          data-testid="tab-settings"
+          className={tab === "settings" ? "tab active" : "tab"}
+          onClick={() => setTab("settings")}
+        >
           Settings
         </button>
       </div>
 
       {tab === "dashboard" && (
         <>
-          <div className="statsGrid">
-            <StatCard label="Total" value={stats.total} />
-            <StatCard label="Downloading" value={stats.downloading} />
-            <StatCard label="Review Queue" value={stats.review} />
-            <StatCard label="Legitimate" value={stats.legitimate} />
-            <StatCard label="Date Review" value={stats.dateNeedsReview} />
-            <StatCard label="Grouped" value={stats.grouped} />
-            <StatCard label="Filed" value={stats.filed} />
-            <StatCard label="Errors" value={stats.errors} danger={stats.errors > 0} />
+          <div className="statsGrid" data-testid="dashboard-stats-grid">
+            <StatCard label="Total" value={stats.total} testId="stat-total" />
+            <StatCard label="Downloading" value={stats.downloading} testId="stat-downloading" />
+            <StatCard label="Review Queue" value={stats.review} testId="stat-review" />
+            <StatCard label="Legitimate" value={stats.legitimate} testId="stat-legitimate" />
+            <StatCard label="Date Review" value={stats.dateNeedsReview} testId="stat-date-review" />
+            <StatCard label="Grouped" value={stats.grouped} testId="stat-grouped" />
+            <StatCard label="Filed" value={stats.filed} testId="stat-filed" />
+            <StatCard label="Errors" value={stats.errors} danger={stats.errors > 0} testId="stat-errors" />
           </div>
 
-          <div className="card">
+          <div className="card" data-testid="dashboard-pipeline-card">
             <h3>Run Pipeline</h3>
             <div className="row">
+              <label className="settingsField" htmlFor="dashboard-working-directory">
+                <span className="fieldLabel">Working Directory</span>
               <input
+                id="dashboard-working-directory"
+                data-testid="dashboard-working-directory"
                 className="wideInput"
                 value={workingDirectory}
                 onChange={(e) => setWorkingDirectoryState(e.target.value)}
                 placeholder="Working directory containing your media"
               />
+              </label>
+              <label className="settingsField" htmlFor="dashboard-output-directory">
+                <span className="fieldLabel">Output Directory</span>
               <input
+                id="dashboard-output-directory"
+                data-testid="dashboard-output-directory"
                 className="wideInput"
                 value={outputDirectory}
                 onChange={(e) => setOutputDirectoryState(e.target.value)}
                 placeholder="Output directory for organized/review/recycle/staging"
               />
+              </label>
             </div>
             <div className="row">
-              <button className="primaryBtn" disabled={busyAction !== null} onClick={onStart}>
+              <button data-testid="pipeline-index" className="primaryBtn" disabled={busyAction !== null} onClick={onStart}>
                 {busyAction === "ingest" ? "Indexing..." : "1) Index Media"}
               </button>
-              <button className="secondaryBtn" disabled={busyAction !== null} onClick={onClassify}>
+              <button data-testid="pipeline-classify" className="secondaryBtn" disabled={busyAction !== null} onClick={onClassify}>
                 {busyAction === "classify" ? "Classifying..." : "2) Classify"}
               </button>
-              <button className="secondaryBtn" disabled={busyAction !== null} onClick={onRunGrouping}>
+              <button data-testid="pipeline-group" className="secondaryBtn" disabled={busyAction !== null} onClick={onRunGrouping}>
                 {busyAction === "group" ? "Grouping..." : "3) Group"}
               </button>
-              <button className="secondaryBtn" disabled={busyAction !== null} onClick={onFinalize}>
+              <button data-testid="pipeline-finalize" className="secondaryBtn" disabled={busyAction !== null} onClick={onFinalize}>
                 {busyAction === "finalize" ? "Finalizing..." : "4) Finalize"}
               </button>
             </div>
-            <div className="progressTrack">
+            <div className="progressTrack" data-testid="pipeline-progress-track">
               <div
                 className="progressFill"
+                data-testid="pipeline-progress-fill"
                 style={{
                   width: `${Math.min(
                     100,
@@ -388,11 +415,17 @@ export function App() {
       )}
 
       {tab === "review" && (
-        <div className="card">
+        <div className="card" data-testid="review-card">
           <h3>Review Queue</h3>
           <div className="row">
-            <span className="muted">{selectedCountLabel}</span>
-            <select value={reviewReasonFilter} onChange={(e) => setReviewReasonFilter(e.target.value)}>
+            <span className="muted" data-testid="review-selected-count">{selectedCountLabel}</span>
+            <label htmlFor="review-reason-filter" className="fieldLabel">Review Reason</label>
+            <select
+              id="review-reason-filter"
+              data-testid="review-reason-filter"
+              value={reviewReasonFilter}
+              onChange={(e) => setReviewReasonFilter(e.target.value)}
+            >
               <option value="all">All reasons</option>
               {Object.entries(reviewReasonCounts).map(([reason, count]) => (
                 <option key={reason} value={reason}>
@@ -400,17 +433,17 @@ export function App() {
                 </option>
               ))}
             </select>
-            <button className="secondaryBtn" onClick={() => onApplyReview("include")}>
+            <button data-testid="review-include" className="secondaryBtn" onClick={() => onApplyReview("include")}>
               Include
             </button>
-            <button className="secondaryBtn" onClick={onConfirmDuplicateKeep}>
+            <button data-testid="review-confirm-duplicate-keep" className="secondaryBtn" onClick={onConfirmDuplicateKeep}>
               Confirm Keep (Duplicate)
             </button>
-            <button className="secondaryBtn" onClick={() => onApplyReview("delete")}>
+            <button data-testid="review-delete" className="secondaryBtn" onClick={() => onApplyReview("delete")}>
               Delete (to recycle)
             </button>
           </div>
-          <div className="grid">
+          <div className="grid" data-testid="review-grid">
             {nonDuplicateReviewItems.map((item) => (
               <ReviewItemCard
                 key={item.id}
@@ -422,19 +455,25 @@ export function App() {
             ))}
           </div>
           {duplicateClusters.length > 0 && (
-            <div style={{ marginTop: 16 }}>
+            <div style={{ marginTop: 16 }} data-testid="duplicate-clusters">
               <h4 style={{ marginBottom: 8 }}>Duplicate Clusters</h4>
               {duplicateClusters.map((cluster) => (
-                <div key={cluster.clusterId} className="item" style={{ marginBottom: 10 }}>
+                <div
+                  key={cluster.clusterId}
+                  className="item"
+                  style={{ marginBottom: 10 }}
+                  data-testid={`duplicate-cluster-${cluster.clusterId}`}
+                >
                   <div className="row" style={{ justifyContent: "space-between" }}>
                     <strong>Cluster {cluster.clusterId}</strong>
                     <span className="muted">{cluster.items.length} candidates</span>
                   </div>
                   <div className="duplicateClusterGrid">
                     {cluster.items.map((item) => (
-                      <div key={item.id} className="duplicateCandidateCard">
+                      <div key={item.id} className="duplicateCandidateCard" data-testid={`duplicate-item-${item.id}`}>
                         <img
                           className="thumbPreview"
+                          data-testid={`review-thumb-${item.id}`}
                           src={getReviewThumbnailUrl(item)}
                           alt={item.filename}
                           onClick={() => openLightbox(cluster.items, item)}
@@ -448,6 +487,7 @@ export function App() {
                         <div className="muted">{item.currentPath}</div>
                         <div className="row">
                           <button
+                            data-testid={`duplicate-keep-${item.id}`}
                             className="secondaryBtn"
                             onClick={async () => {
                               try {
@@ -463,6 +503,7 @@ export function App() {
                             Keep This
                           </button>
                           <button
+                            data-testid={`duplicate-delete-${item.id}`}
                             className="secondaryBtn"
                             onClick={async () => {
                               try {
@@ -488,7 +529,7 @@ export function App() {
       )}
 
       {tab === "dates" && (
-        <div className="card">
+        <div className="card" data-testid="date-approval-card">
           <h3>Date Metadata Approval</h3>
           <div className="grid">
             {dateItems.map((item) => (
@@ -506,7 +547,7 @@ export function App() {
       )}
 
       {tab === "events" && (
-        <div className="card">
+        <div className="card" data-testid="event-groups-card">
           <h3>Event Group Review</h3>
           <div className="grid">
             {groups.map((group) => (
@@ -524,14 +565,16 @@ export function App() {
       )}
 
       {tab === "settings" && (
-        <div className="card">
+        <div className="card" data-testid="settings-card">
           <h3>Settings</h3>
           <p className="muted">Configuration only needs a working directory and your OpenAI API key.</p>
-          <h4 className="settingsSectionTitle">Directories</h4>
+          <h4 className="settingsSectionTitle" data-testid="settings-section-directories">Directories</h4>
           <div className="row settingsDirectoriesRow">
             <div className="settingsField">
-              <label className="fieldLabel">Working Directory</label>
+              <label className="fieldLabel" htmlFor="settings-working-directory">Working Directory</label>
               <input
+                id="settings-working-directory"
+                data-testid="settings-working-directory"
                 style={{ minWidth: 320 }}
                 placeholder="C:\\Memoria\\inbox"
                 value={workingDirectory}
@@ -539,8 +582,10 @@ export function App() {
               />
             </div>
             <div className="settingsField">
-              <label className="fieldLabel">Output Directory</label>
+              <label className="fieldLabel" htmlFor="settings-output-directory">Output Directory</label>
               <input
+                id="settings-output-directory"
+                data-testid="settings-output-directory"
                 style={{ minWidth: 320 }}
                 placeholder="C:\\Memoria"
                 value={outputDirectory}
@@ -550,6 +595,7 @@ export function App() {
           </div>
           <div className="row">
             <button
+              data-testid="settings-save-directories"
               className="primaryBtn"
               onClick={async () => {
                 try {
@@ -566,19 +612,25 @@ export function App() {
               Save Directories
             </button>
           </div>
-          <h4 className="settingsSectionTitle">API Keys</h4>
+          <h4 className="settingsSectionTitle" data-testid="settings-section-api-keys">API Keys</h4>
           <div className="row">
+            <label htmlFor="settings-openai-key" className="fieldLabel">OpenAI API Key</label>
             <input
+              id="settings-openai-key"
+              data-testid="settings-openai-key"
               type="password"
               style={{ minWidth: 420 }}
               placeholder="OpenAI API Key"
               value={openAiKey}
               onChange={(e) => setOpenAiKey(e.target.value)}
             />
-            <button className="secondaryBtn" onClick={onSaveOpenAiKey}>
+            <button data-testid="settings-save-openai-key" className="secondaryBtn" onClick={onSaveOpenAiKey}>
               Save OpenAI Key
             </button>
+            <label htmlFor="settings-anthropic-key" className="fieldLabel">Anthropic API Key</label>
             <input
+              id="settings-anthropic-key"
+              data-testid="settings-anthropic-key"
               type="password"
               style={{ minWidth: 420 }}
               placeholder="Anthropic API Key"
@@ -586,6 +638,7 @@ export function App() {
               onChange={(e) => setAnthropicKeyState(e.target.value)}
             />
             <button
+              data-testid="settings-save-anthropic-key"
               className="secondaryBtn"
               onClick={async () => {
                 if (!anthropicKey) {
@@ -603,29 +656,34 @@ export function App() {
               Save Anthropic Key
             </button>
           </div>
-          <h4 className="settingsSectionTitle">AI Task Models</h4>
+          <h4 className="settingsSectionTitle" data-testid="settings-section-ai-models">AI Task Models</h4>
           <div className="row">
             <ModelSelector
               label="Classification"
+              testPrefix="classification"
               value={aiModels.classification}
               onChange={(next) => setAiModels((prev) => ({ ...prev, classification: next }))}
             />
             <ModelSelector
               label="Date Estimation"
+              testPrefix="date-estimation"
               value={aiModels.dateEstimation}
               onChange={(next) => setAiModels((prev) => ({ ...prev, dateEstimation: next }))}
             />
             <ModelSelector
               label="Event Naming"
+              testPrefix="event-naming"
               value={aiModels.eventNaming}
               onChange={(next) => setAiModels((prev) => ({ ...prev, eventNaming: next }))}
             />
             <ModelSelector
               label="Duplicate Ranking"
+              testPrefix="duplicate-ranking"
               value={aiModels.duplicateRanking}
               onChange={(next) => setAiModels((prev) => ({ ...prev, duplicateRanking: next }))}
             />
             <button
+              data-testid="settings-save-ai-models"
               className="secondaryBtn"
               onClick={async () => {
                 try {
@@ -664,8 +722,14 @@ export function App() {
         </div>
       )}
       {lightbox && lightboxCurrent && (
-        <div className="lightboxOverlay" onClick={() => setLightbox(null)}>
-          <div className="lightboxCard" onClick={(e) => e.stopPropagation()}>
+        <div className="lightboxOverlay" data-testid="lightbox-overlay" onClick={() => setLightbox(null)}>
+          <div
+            className="lightboxCard"
+            role="dialog"
+            aria-label="Image preview"
+            data-testid="lightbox-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="row" style={{ justifyContent: "space-between" }}>
               <strong>
                 {lightboxCurrent.filename}
@@ -673,6 +737,7 @@ export function App() {
               </strong>
               <div className="row">
                 <button
+                  data-testid="lightbox-keep"
                   className="primaryBtn"
                   disabled={!lightboxCurrent.duplicateClusterId}
                   onClick={async () => {
@@ -691,6 +756,7 @@ export function App() {
                   Keep This
                 </button>
                 <button
+                  data-testid="lightbox-delete"
                   className="secondaryBtn"
                   onClick={async () => {
                     try {
@@ -706,6 +772,7 @@ export function App() {
                   Delete This
                 </button>
                 <button
+                  data-testid="lightbox-prev"
                   className="secondaryBtn"
                   disabled={lightbox.items.length <= 1}
                   onClick={() => moveLightbox(-1)}
@@ -713,19 +780,21 @@ export function App() {
                   Prev
                 </button>
                 <button
+                  data-testid="lightbox-next"
                   className="secondaryBtn"
                   disabled={lightbox.items.length <= 1}
                   onClick={() => moveLightbox(1)}
                 >
                   Next
                 </button>
-                <button className="secondaryBtn" onClick={() => setLightbox(null)}>
+                <button data-testid="lightbox-close" className="secondaryBtn" onClick={() => setLightbox(null)}>
                   Close
                 </button>
               </div>
             </div>
             <img
               className="lightboxImage"
+              data-testid="lightbox-image"
               src={getReviewOriginalUrl(lightboxCurrent)}
               alt={lightboxCurrent.filename}
             />
@@ -751,9 +820,10 @@ function ReviewItemCard({
   onOpenPreview: (item: MediaItem) => void;
 }) {
   return (
-    <div className="item">
+    <div className="item" data-testid={`review-item-${item.id}`}>
       <img
         className="thumbPreview"
+        data-testid={`review-thumb-${item.id}`}
         src={getReviewThumbnailUrl(item)}
         alt={item.filename}
         onClick={() => onOpenPreview(item)}
@@ -761,8 +831,10 @@ function ReviewItemCard({
           (e.currentTarget as HTMLImageElement).src = getReviewOriginalUrl(item);
         }}
       />
-      <label className="row">
+      <label className="row" htmlFor={`review-select-${item.id}`}>
         <input
+          id={`review-select-${item.id}`}
+          data-testid={`review-select-${item.id}`}
           type="checkbox"
           checked={selectedReviewIds.includes(item.id)}
           onChange={(e) => {
@@ -796,16 +868,35 @@ function getReviewThumbnailUrl(item: MediaItem): string {
   const sep = p[idx];
   const dir = p.slice(0, idx);
   const thumb = `${dir}${sep}.thumbnails${sep}${item.id}.jpg`;
-  return convertFileSrc(thumb);
+  return safeConvertFileSrc(thumb);
 }
 
 function getReviewOriginalUrl(item: MediaItem): string {
-  return convertFileSrc(item.currentPath);
+  return safeConvertFileSrc(item.currentPath);
 }
 
-function StatCard({ label, value, danger }: { label: string; value: number; danger?: boolean }) {
+function safeConvertFileSrc(path: string): string {
+  try {
+    return convertFileSrc(path);
+  } catch {
+    const normalized = path.replace(/\\/g, "/");
+    return /^[a-zA-Z]:\//.test(normalized) ? `file:///${normalized}` : `file://${normalized}`;
+  }
+}
+
+function StatCard({
+  label,
+  value,
+  danger,
+  testId
+}: {
+  label: string;
+  value: number;
+  danger?: boolean;
+  testId?: string;
+}) {
   return (
-    <div className="card statCard">
+    <div className="card statCard" data-testid={testId}>
       <div className="muted">{label}</div>
       <div className={danger ? "statValue danger" : "statValue"}>{value}</div>
     </div>
@@ -821,15 +912,24 @@ function DateCard({
 }) {
   const [value, setValue] = useState(item.aiDate ?? "");
   return (
-    <div className="item">
+    <div className="item" data-testid={`date-item-${item.mediaItemId}`}>
       <strong>{item.filename}</strong>
       <div className="muted">Current: {item.currentDate ?? "(missing)"}</div>
       <div className="muted">AI: {item.aiDate ?? "(none)"} ({Math.round(item.confidence * 100)}%)</div>
       <div className="muted">{item.reasoning}</div>
       <div className="row">
-        <input type="date" value={value} onChange={(e) => setValue(e.target.value)} />
-        <button onClick={() => onApply(value || null)}>Approve/Edit</button>
-        <button onClick={() => onApply(null)}>Skip</button>
+        <input
+          type="date"
+          data-testid={`date-input-${item.mediaItemId}`}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <button data-testid={`date-approve-${item.mediaItemId}`} onClick={() => onApply(value || null)}>
+          Approve/Edit
+        </button>
+        <button data-testid={`date-skip-${item.mediaItemId}`} onClick={() => onApply(null)}>
+          Skip
+        </button>
       </div>
     </div>
   );
@@ -844,12 +944,18 @@ function EventCard({
 }) {
   const [value, setValue] = useState(group.name);
   return (
-    <div className="item">
+    <div className="item" data-testid={`event-group-${group.id}`}>
       <strong>{group.folderName}</strong>
       <div className="muted">{group.itemCount} items</div>
       <div className="row">
-        <input value={value} onChange={(e) => setValue(e.target.value)} />
-        <button onClick={() => onRename(value)}>Rename</button>
+        <input
+          data-testid={`event-rename-input-${group.id}`}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <button data-testid={`event-rename-save-${group.id}`} onClick={() => onRename(value)}>
+          Rename
+        </button>
       </div>
     </div>
   );
@@ -857,21 +963,32 @@ function EventCard({
 
 function ModelSelector({
   label,
+  testPrefix,
   value,
   onChange
 }: {
   label: string;
+  testPrefix: string;
   value: { provider: string; model: string };
   onChange: (value: { provider: string; model: string }) => void;
 }) {
+  const providerId = `${testPrefix}-provider`;
+  const modelId = `${testPrefix}-model`;
   return (
-    <div className="row" style={{ alignItems: "center", gap: 6 }}>
-      <span className="muted">{label}</span>
-      <select value={value.provider} onChange={(e) => onChange({ ...value, provider: e.target.value })}>
+    <div className="row" style={{ alignItems: "center", gap: 6 }} data-testid={`model-selector-${testPrefix}`}>
+      <label className="muted" htmlFor={providerId}>{label}</label>
+      <select
+        id={providerId}
+        data-testid={`model-provider-${testPrefix}`}
+        value={value.provider}
+        onChange={(e) => onChange({ ...value, provider: e.target.value })}
+      >
         <option value="openai">OpenAI</option>
         <option value="anthropic">Anthropic</option>
       </select>
       <input
+        id={modelId}
+        data-testid={`model-name-${testPrefix}`}
         style={{ minWidth: 180 }}
         value={value.model}
         onChange={(e) => onChange({ ...value, model: e.target.value })}

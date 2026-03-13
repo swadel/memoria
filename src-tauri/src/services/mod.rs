@@ -6,3 +6,4 @@ pub mod exiftool;
 pub mod file_organizer;
 pub mod review_rules;
 pub mod settings;
+pub mod test_fixtures;

@@ -10,3 +10,5 @@ src-tauri/target/
 sidecar/dist/
 sidecar/build/
 __pycache__/
+playwright-report/
+test-results/
