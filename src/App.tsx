@@ -451,6 +451,7 @@ export function App() {
       disabled: busyAction !== null
     };
   }, [stats.total, stats.imagePhaseState, stats.videoPhaseState, stats.dateNeedsReview, busyAction]);
+  const hasInitiatedIndexing = stats.total > 0 || pipelineStages.index !== "idle" || busyAction === "ingest";
   const workflowSteps = useMemo(() => {
     const states = deriveWorkflowStepStates(pipelineStages, tab);
     const stateById = Object.fromEntries(states.map((step) => [step.id, step.state])) as Record<PipelineStage, WorkflowStepState>;
@@ -710,6 +711,7 @@ export function App() {
                 needingReview={{ images: stats.imageReview, dates: stats.dateNeedsReview }}
                 previewThumbnails={dashboardStackThumbs}
                 progressPercent={globalProgressPct}
+                actionLabel={hasInitiatedIndexing ? "Resume Organizing" : "Start Organizing"}
                 onAction={() => {
                   if (dashboardPrimaryAction.disabled) return;
                   dashboardPrimaryAction.onClick();

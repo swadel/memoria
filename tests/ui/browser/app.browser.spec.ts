@@ -53,9 +53,33 @@ test.describe("Memoria browser UI", () => {
     await expect(page.getByTestId("dashboard-progress-copy")).toContainText("You've filed");
     await expect(page.getByTestId("progress-memory-stack")).toBeVisible();
     await expect(page.getByTestId("progress-hero-edge-fill")).toBeVisible();
+    await expect(page.getByTestId("dashboard-progress-action")).toHaveText("Resume Organizing");
     const fillStyle = await page.getByTestId("progress-hero-edge-fill").evaluate((el) => (el as HTMLElement).style.width);
     const fillPercent = Number.parseFloat(fillStyle);
     expect(fillPercent).toBeGreaterThan(40);
+  });
+
+  test("dashboard hero centers logo and text content", async ({ page }) => {
+    await expect(page.getByTestId("progress-memory-stack")).toBeVisible();
+    const layoutStyles = await page.locator(".progressHeroContent").evaluate((el) => {
+      const styles = getComputedStyle(el as HTMLElement);
+      return {
+        justifyContent: styles.justifyContent,
+        alignItems: styles.alignItems
+      };
+    });
+    const bodyTextAlign = await page.getByTestId("progress-hero-body").evaluate((el) => getComputedStyle(el as HTMLElement).textAlign);
+    expect(layoutStyles.justifyContent).toBe("center");
+    expect(layoutStyles.alignItems).toBe("center");
+    expect(bodyTextAlign).toBe("center");
+  });
+
+  test("dashboard action is start organizing before first indexing", async ({ context }) => {
+    const preIndexPage = await context.newPage();
+    await installBrowserApiMock(preIndexPage, "pre-index");
+    await preIndexPage.goto("/");
+    await expect(preIndexPage.getByTestId("dashboard-progress-action")).toHaveText("Start Organizing");
+    await preIndexPage.close();
   });
 
   test("indexing uses LoadingState component with branded logo", async ({ context }) => {

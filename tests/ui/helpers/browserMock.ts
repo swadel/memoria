@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "reset-error" | "reset-slow" | "ingest-slow" | "complete" | "grouping-empty";
+type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "pre-index" | "reset-error" | "reset-slow" | "ingest-slow" | "complete" | "grouping-empty";
 
 type DateEstimate = {
   mediaItemId: number;
@@ -60,8 +60,9 @@ type ImageReviewItem = {
 function buildState(profile: BrowserFixtureProfile) {
   const isIngestSlow = profile === "ingest-slow";
   const isGroupingEmpty = profile === "grouping-empty";
+  const isPreIndex = profile === "pre-index";
   const dateItems: DateEstimate[] =
-    profile === "settings-only" || isIngestSlow || isGroupingEmpty
+    profile === "settings-only" || isIngestSlow || isGroupingEmpty || isPreIndex
       ? []
       : [
           {
@@ -83,7 +84,7 @@ function buildState(profile: BrowserFixtureProfile) {
         ];
 
   const eventGroups: EventGroup[] =
-    profile === "settings-only" || isIngestSlow || isGroupingEmpty
+    profile === "settings-only" || isIngestSlow || isGroupingEmpty || isPreIndex
       ? []
       : [
           {
@@ -97,7 +98,7 @@ function buildState(profile: BrowserFixtureProfile) {
         ];
 
   const eventGroupItemsByGroupId: Record<number, EventGroupItem[]> =
-    profile === "settings-only" || isIngestSlow || isGroupingEmpty
+    profile === "settings-only" || isIngestSlow || isGroupingEmpty || isPreIndex
       ? {}
       : {
           401:
@@ -135,22 +136,22 @@ function buildState(profile: BrowserFixtureProfile) {
 
   const isComplete = profile === "complete";
   const stats = {
-    total: isIngestSlow ? 0 : 8,
-    indexed: 2,
-    imageReview: isComplete ? 0 : 2,
-    imageVerified: 4,
-    dateReview: isComplete || isGroupingEmpty ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
-    dateNeedsReview: isComplete || isGroupingEmpty ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
-    dateVerified: isComplete ? 8 : isGroupingEmpty ? 0 : 5,
-    grouped: isComplete ? 8 : isGroupingEmpty ? 0 : 2,
-    filed: isComplete ? 8 : 1,
-    imageFlaggedPending: isComplete ? 0 : 2,
-    imagePhaseState: (profile === "pre-video" || isIngestSlow ? "pending" : "complete") as "pending" | "in_progress" | "complete",
+    total: isIngestSlow || isPreIndex ? 0 : 8,
+    indexed: isPreIndex ? 0 : 2,
+    imageReview: isComplete || isPreIndex ? 0 : 2,
+    imageVerified: isPreIndex ? 0 : 4,
+    dateReview: isComplete || isGroupingEmpty || isPreIndex ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
+    dateNeedsReview: isComplete || isGroupingEmpty || isPreIndex ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
+    dateVerified: isComplete ? 8 : isGroupingEmpty || isPreIndex ? 0 : 5,
+    grouped: isComplete ? 8 : isGroupingEmpty || isPreIndex ? 0 : 2,
+    filed: isComplete ? 8 : isPreIndex ? 0 : 1,
+    imageFlaggedPending: isComplete || isPreIndex ? 0 : 2,
+    imagePhaseState: (profile === "pre-video" || isIngestSlow || isPreIndex ? "pending" : "complete") as "pending" | "in_progress" | "complete",
     videoTotal: 3,
     videoFlagged: 2,
     videoExcluded: 1,
     videoUnreviewedFlagged: 2,
-    videoPhaseState: (isComplete || isGroupingEmpty ? "complete" : profile === "pre-video" || isIngestSlow ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
+    videoPhaseState: (isComplete || isGroupingEmpty ? "complete" : profile === "pre-video" || isIngestSlow || isPreIndex ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
   };
 
   const imageItems: ImageReviewItem[] = [

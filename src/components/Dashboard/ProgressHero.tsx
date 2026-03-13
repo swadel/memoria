@@ -7,6 +7,7 @@ interface ProgressHeroProps {
   needingReview: { images: number; dates: number };
   previewThumbnails?: string[];
   progressPercent?: number;
+  actionLabel?: string;
   onAction: () => void;
 }
 
@@ -16,6 +17,7 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({
   needingReview,
   previewThumbnails = [],
   progressPercent,
+  actionLabel = "Resume Organizing",
   onAction
 }) => {
   const percentage = total > 0 ? Math.round((filed / total) * 100) : 0;
@@ -25,7 +27,7 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({
 
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white p-10 shadow-paper border-none progressHeroRoot" data-testid="dashboard-progress-hero">
-      <div className="flex flex-col items-center gap-10 md:flex-row progressHeroContent">
+      <div className="flex flex-col items-center justify-center gap-10 progressHeroContent">
         <div className="progressHeroMemoryStack" data-testid="progress-memory-stack">
           {visibleThumbs.length > 0 ? (
             visibleThumbs.map((src, index) => (
@@ -44,7 +46,7 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({
           )}
         </div>
 
-        <div className="flex-1 space-y-5 text-center md:text-left progressHeroBody">
+        <div className="space-y-5 text-center progressHeroBody" data-testid="progress-hero-body">
           <h2 className="text-4xl font-semibold tracking-tight text-slate-900 leading-tight progressHeroHeading" data-testid="dashboard-progress-copy">
             {isComplete ? "Your archive is fully organized!" : `You've filed ${filed} of ${total} items.`}
           </h2>
@@ -54,8 +56,9 @@ export const ProgressHero: React.FC<ProgressHeroProps> = ({
           <button
             onClick={onAction}
             className="rounded-full bg-petal-blue px-10 py-4 font-bold text-white shadow-lg transition-all hover:bg-blue-400 hover:-translate-y-1 active:scale-95 progressHeroButton"
+            data-testid="dashboard-progress-action"
           >
-            Resume Organizing
+            {actionLabel}
           </button>
         </div>
       </div>
