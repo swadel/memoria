@@ -2213,6 +2213,7 @@ function ImageReviewView({
   const [thumbs, setThumbs] = useState<Record<number, string>>({});
   const containerRef = useRef<HTMLDivElement>(null);
   const [columnCount, setColumnCount] = useState(4);
+  const [gridWidth, setGridWidth] = useState(0);
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
 
   const baseItems = useMemo(
@@ -2267,6 +2268,7 @@ function ImageReviewView({
     if (!container) return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
+        setGridWidth(entry.contentRect.width);
         setColumnCount(calculateColumnCount(entry.contentRect.width, 180));
       }
     });
@@ -2274,11 +2276,21 @@ function ImageReviewView({
     return () => observer.disconnect();
   }, []);
 
+  const imageTileSize = useMemo(() => {
+    if (columnCount <= 0 || !Number.isFinite(gridWidth) || gridWidth <= 0) {
+      return THUMBNAIL_SIZE;
+    }
+    const horizontalPadding = 24;
+    const rowGap = 12;
+    const usableWidth = Math.max(0, gridWidth - horizontalPadding - rowGap * Math.max(0, columnCount - 1));
+    return Math.max(140, Math.floor(usableWidth / columnCount));
+  }, [columnCount, gridWidth]);
+
   const rowCount = calculateRowCount(visibleItems.length, columnCount);
   const rowVirtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => containerRef.current,
-    estimateSize: () => ITEM_HEIGHT + 16,
+    estimateSize: () => imageTileSize + 12,
     overscan: 3
   });
   const modalItems = viewMode === "burst" ? visibleItems : visibleItems;
@@ -2384,8 +2396,9 @@ function ImageReviewView({
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const startIndex = virtualRow.index * columnCount;
               const rowItems = visibleItems.slice(startIndex, startIndex + columnCount);
+              const emptySlotCount = calculateEmptySlotsInRow(rowItems.length, columnCount);
               return (
-                <div key={virtualRow.key} style={{ position: "absolute", top: virtualRow.start, left: 0, right: 0, display: "flex", gap: "8px", padding: "0 8px" }}>
+                <div key={virtualRow.key} style={{ position: "absolute", top: virtualRow.start, left: 0, right: 0, display: "flex", gap: "12px", padding: "0 12px", boxSizing: "border-box" }}>
                   {rowItems.map((item, offset) => (
                     <motion.div
                       key={item.id}
@@ -2408,6 +2421,7 @@ function ImageReviewView({
                       />
                     </motion.div>
                   ))}
+                  {emptySlotCount > 0 ? Array.from({ length: emptySlotCount }).map((_, index) => <div key={`i-empty-${virtualRow.index}-${index}`} style={{ flex: "1 1 0", minWidth: 0 }} />) : null}
                 </div>
               );
             })}
@@ -2614,6 +2628,7 @@ function VideoReviewView({
   const [inlinePlayingId, setInlinePlayingId] = useState<number | null>(null);
   const [modalIndex, setModalIndex] = useState<number | null>(null);
   const [columnCount, setColumnCount] = useState(4);
+  const [gridWidth, setGridWidth] = useState(0);
   const [scrollHeight, setScrollHeight] = useState(500);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
@@ -2656,12 +2671,24 @@ function VideoReviewView({
     if (!container) return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
+        setGridWidth(entry.contentRect.width);
         setColumnCount(calculateColumnCount(entry.contentRect.width, MIN_ITEM_WIDTH));
       }
     });
     observer.observe(container);
     return () => observer.disconnect();
   }, []);
+
+  const videoTileHeight = useMemo(() => {
+    if (columnCount <= 0 || !Number.isFinite(gridWidth) || gridWidth <= 0) {
+      return Math.round((THUMBNAIL_SIZE * 9) / 16);
+    }
+    const horizontalPadding = 24;
+    const rowGap = 12;
+    const usableWidth = Math.max(0, gridWidth - horizontalPadding - rowGap * Math.max(0, columnCount - 1));
+    const tileWidth = Math.max(MIN_ITEM_WIDTH, Math.floor(usableWidth / columnCount));
+    return Math.max(96, Math.round((tileWidth * 9) / 16));
+  }, [columnCount, gridWidth]);
 
   useEffect(() => {
     const updateHeight = () => {
@@ -2679,7 +2706,7 @@ function VideoReviewView({
   const rowVirtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => containerRef.current,
-    estimateSize: () => ITEM_HEIGHT + 20,
+    estimateSize: () => videoTileHeight + 12,
     overscan: 3
   });
 
@@ -2845,7 +2872,7 @@ function VideoReviewView({
               return (
                 <div
                   key={virtualRow.key}
-                  style={{ position: "absolute", top: virtualRow.start, left: 0, right: 0, display: "flex", gap: "8px", padding: "0 8px", boxSizing: "border-box" }}
+                  style={{ position: "absolute", top: virtualRow.start, left: 0, right: 0, display: "flex", gap: "12px", padding: "0 12px", boxSizing: "border-box" }}
                 >
                   {rowItems.map((item, offset) => {
                     const isSelected = selected.has(item.id);

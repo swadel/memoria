@@ -161,6 +161,34 @@ test.describe("Memoria browser UI", () => {
     await expect(page.getByTestId("status-pill")).toContainText("Image review complete");
   });
 
+  test("image and video grids keep consistent tile sizing and spacing", async ({ page }) => {
+    await page.setViewportSize({ width: 860, height: 900 });
+
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-filter-all").click();
+    const firstImage = page.getByTestId("image-item-501");
+    const trailingImage = page.getByTestId("image-item-503");
+    await expect(firstImage).toBeVisible();
+    await expect(trailingImage).toBeVisible();
+    const [firstImageBox, trailingImageBox] = await Promise.all([firstImage.boundingBox(), trailingImage.boundingBox()]);
+    expect(firstImageBox).not.toBeNull();
+    expect(trailingImageBox).not.toBeNull();
+    if (!firstImageBox || !trailingImageBox) return;
+    expect(trailingImageBox.width).toBeLessThanOrEqual(firstImageBox.width * 1.4);
+
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-filter-mode-size").check();
+    await page.getByTestId("video-size-slider").fill("50");
+    const videoTiles = page.locator("[data-testid^='video-item-']");
+    await expect(videoTiles.first()).toBeVisible();
+    const videoFirstBox = await videoTiles.nth(0).boundingBox();
+    expect(videoFirstBox).not.toBeNull();
+    if (!videoFirstBox) return;
+    const ratio = videoFirstBox.width / Math.max(videoFirstBox.height, 1);
+    expect(ratio).toBeGreaterThan(1.5);
+    expect(ratio).toBeLessThan(1.95);
+  });
+
   test("image done shows loading overlay before video review", async ({ context }) => {
     const imageFlowPage = await context.newPage();
     await installBrowserApiMock(imageFlowPage, "phase-busy");
