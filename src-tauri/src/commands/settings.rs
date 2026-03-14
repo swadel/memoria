@@ -17,6 +17,7 @@ pub struct TaskModelSelection {
 pub struct AiTaskModels {
     pub date_estimation: TaskModelSelection,
     pub event_naming: TaskModelSelection,
+    pub event_naming_fallback: Option<TaskModelSelection>,
 }
 
 #[derive(Serialize)]
@@ -94,6 +95,11 @@ pub fn get_app_configuration(state: State<'_, AppState>) -> Result<AppConfigurat
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet-4-6".to_string(),
             },
+        )?,
+        event_naming_fallback: read_optional_task_model(
+            &conn,
+            "ai_model_event_naming_fallback_provider",
+            "ai_model_event_naming_fallback",
         )?,
     };
     Ok(AppConfiguration {
@@ -185,7 +191,16 @@ pub async fn set_ai_task_model(
     let (provider_key, model_key) = match task.as_str() {
         "dateEstimation" => ("ai_model_date_estimation_provider", "ai_model_date_estimation"),
         "eventNaming" => ("ai_model_event_naming_provider", "ai_model_event_naming"),
-        _ => return Err("Unknown AI task. Expected dateEstimation/eventNaming.".to_string()),
+        "eventNamingFallback" => (
+            "ai_model_event_naming_fallback_provider",
+            "ai_model_event_naming_fallback",
+        ),
+        _ => {
+            return Err(
+                "Unknown AI task. Expected dateEstimation/eventNaming/eventNamingFallback."
+                    .to_string(),
+            )
+        }
     };
     let conn = state.open_conn().map_err(|e| e.to_string())?;
     db::set_setting(&conn, provider_key, &provider).map_err(|e| e.to_string())?;
@@ -292,6 +307,23 @@ fn read_task_model(
     Ok(TaskModelSelection { provider, model })
 }
 
+fn read_optional_task_model(
+    conn: &rusqlite::Connection,
+    provider_key: &str,
+    model_key: &str,
+) -> Result<Option<TaskModelSelection>, String> {
+    let provider = db::get_setting(conn, provider_key)
+        .map_err(|e| e.to_string())?
+        .filter(|v| !v.trim().is_empty());
+    let model = db::get_setting(conn, model_key)
+        .map_err(|e| e.to_string())?
+        .filter(|v| !v.trim().is_empty());
+    Ok(match (provider, model) {
+        (Some(provider), Some(model)) => Some(TaskModelSelection { provider, model }),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,6 +346,10 @@ mod tests {
         db::set_setting(&conn, "output_directory", r"C:\Memoria\Output").expect("set output");
         db::set_setting(&conn, "ai_model_date_estimation_provider", "anthropic").expect("set provider");
         db::set_setting(&conn, "ai_model_date_estimation", "claude-sonnet-4-6").expect("set model");
+        db::set_setting(&conn, "ai_model_event_naming_fallback_provider", "openai")
+            .expect("set fallback provider");
+        db::set_setting(&conn, "ai_model_event_naming_fallback", "gpt-4o")
+            .expect("set fallback model");
 
         assert_eq!(
             settings::get_secret_with_fallback(&conn, "openai_api_key")
@@ -345,6 +381,15 @@ mod tests {
                 .as_deref(),
             Some("claude-sonnet-4-6")
         );
+        let fallback = read_optional_task_model(
+            &conn,
+            "ai_model_event_naming_fallback_provider",
+            "ai_model_event_naming_fallback",
+        )
+        .expect("read fallback")
+        .expect("fallback exists");
+        assert_eq!(fallback.provider, "openai");
+        assert_eq!(fallback.model, "gpt-4o");
 
         drop(conn);
         let _ = fs::remove_file(db_path);

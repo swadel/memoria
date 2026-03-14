@@ -2,17 +2,22 @@ use anyhow::Result;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime};
 use reqwest::Client;
 use rusqlite::{params, Connection};
+use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use tokio::time::{Duration, Instant};
 
 use super::{
-    ai_client::{AiClient, EventNameSuggestion, EventNamingRequest},
+    ai_client::{
+        AiClient, ClusterMetadata, EventNameSuggestion, EventNamingRequest, CLUSTER_METADATA_PROMPT_VERSION,
+        EVENT_NAMING_PROMPT_VERSION,
+    },
     exiftool, runtime_log,
 };
 
 const CLUSTER_GAP_DAYS: i64 = 2;
 const CLUSTER_SPAN_SPLIT_DAYS: i64 = 14;
+const PASS1_MIN_CLUSTER_SIZE: usize = 5;
 const NOMINATIM_REVERSE_URL: &str = "https://nominatim.openstreetmap.org/reverse";
 const NOMINATIM_USER_AGENT: &str = "Memoria/1.0 (photo organizer app)";
 const NOMINATIM_MIN_REQUEST_INTERVAL_MS: u64 = 1100;
@@ -23,6 +28,12 @@ struct ClusterItem {
     capture_at: NaiveDateTime,
     filename: String,
     current_path: String,
+}
+
+#[derive(Debug, Clone)]
+struct ClusterNamingOutcome {
+    suggestion: EventNameSuggestion,
+    pass1: Option<ClusterMetadata>,
 }
 
 pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
@@ -78,8 +89,13 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
 
         let mut queue = clusters;
         while let Some(cluster) = queue.pop() {
-            let naming = name_cluster(year, &cluster, ai, &http, &mut geocoder).await?;
-            let lowered = naming.folder_name.to_ascii_lowercase();
+            let outcome = name_cluster(year, &cluster, ai, &http, &mut geocoder).await?;
+            let naming = outcome.suggestion;
+            let normalized_for_split = naming
+                .folder_name
+                .strip_prefix(&format!("{year} - "))
+                .unwrap_or(naming.folder_name.as_str());
+            let lowered = normalized_for_split.to_ascii_lowercase();
             if cluster.len() > 20 && (lowered == "family gathering" || lowered == "misc") {
                 let split = split_cluster_at_largest_gap(&cluster);
                 if split.len() > 1 {
@@ -101,24 +117,87 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
             let start_date = cluster.first().map(|x| x.capture_at.date()).expect("cluster has item");
             let end_date = cluster.last().map(|x| x.capture_at.date()).expect("cluster has item");
             let final_folder_name = apply_low_confidence_fallback_if_needed(conn, year, start_date, &naming)?;
+            let final_folder_name = resolve_folder_name_collision(conn, year, &final_folder_name)?;
             let simple_name = final_folder_name
                 .strip_prefix(&format!("{year} - "))
                 .unwrap_or(final_folder_name.as_str())
                 .to_string();
+            let pass1_json = outcome
+                .pass1
+                .as_ref()
+                .and_then(|metadata| serde_json::to_string(metadata).ok());
+            let pass1_model = outcome.pass1.as_ref().and_then(|m| m.model_used.clone());
+            let needs_fallback = if naming.needs_fallback { 1 } else { 0 };
+            let fallback_used = if naming.fallback_used { 1 } else { 0 };
+            let is_misc = if naming
+                .event_type
+                .as_deref()
+                .map(|x| x.eq_ignore_ascii_case("misc"))
+                .unwrap_or_else(|| simple_name.eq_ignore_ascii_case("misc"))
+            {
+                1
+            } else {
+                0
+            };
 
             conn.execute(
-                "INSERT INTO event_groups(year, name, folder_name, ai_suggested_name, is_misc, user_approved, item_count, start_date, end_date)
-                 VALUES(?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8)",
+                "INSERT INTO event_groups(
+                    year, name, folder_name, ai_suggested_name, is_misc, user_approved, item_count, start_date, end_date,
+                    ai_event_type, ai_confidence, ai_reasoning, ai_prompt_version, ai_model_used, ai_location_used,
+                    ai_needs_fallback, ai_fallback_used, ai_fallback_model, ai_pass1_result, ai_pass1_model
+                 )
+                 VALUES(?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
                 params![
                     year,
                     simple_name,
                     final_folder_name,
-                    format!("{year} - {}", naming.folder_name),
-                    if naming.folder_name.eq_ignore_ascii_case("Misc") { 1 } else { 0 },
+                    naming.folder_name,
+                    is_misc,
                     cluster.len() as i64,
                     start_date.to_string(),
-                    end_date.to_string()
+                    end_date.to_string(),
+                    naming.event_type,
+                    naming.confidence,
+                    naming.reasoning,
+                    naming
+                        .prompt_version
+                        .clone()
+                        .unwrap_or_else(|| EVENT_NAMING_PROMPT_VERSION.to_string()),
+                    naming.model_used,
+                    naming.location_used,
+                    needs_fallback,
+                    fallback_used,
+                    naming.fallback_model,
+                    pass1_json,
+                    pass1_model
                 ],
+            )?;
+            conn.execute(
+                "INSERT INTO audit_log(media_item_id, action, source, details)
+                 VALUES(NULL, 'ai_event_naming_decision', 'event_grouper', ?1)",
+                params![json!({
+                    "year": year,
+                    "cluster_size": cluster.len(),
+                    "start_date": start_date.to_string(),
+                    "end_date": end_date.to_string(),
+                    "final_folder_name": final_folder_name,
+                    "prompt_version": naming
+                        .prompt_version
+                        .clone()
+                        .unwrap_or_else(|| EVENT_NAMING_PROMPT_VERSION.to_string()),
+                    "model_used": naming.model_used,
+                    "confidence": naming.confidence,
+                    "event_type": naming.event_type,
+                    "needs_fallback": naming.needs_fallback,
+                    "fallback_used": naming.fallback_used,
+                    "fallback_model": naming.fallback_model,
+                    "pass1_prompt_version": outcome
+                        .pass1
+                        .as_ref()
+                        .and_then(|m| m.prompt_version.clone())
+                        .unwrap_or_else(|| CLUSTER_METADATA_PROMPT_VERSION.to_string()),
+                })
+                .to_string()],
             )?;
             let group_id = conn.last_insert_rowid();
             total_groups += 1;
@@ -140,21 +219,42 @@ async fn name_cluster(
     ai: &AiClient,
     http: &Client,
     geocoder: &mut ReverseGeocoder,
-) -> Result<EventNameSuggestion> {
+) -> Result<ClusterNamingOutcome> {
     if cluster.len() < 3 {
-        return Ok(EventNameSuggestion {
-            folder_name: "Misc".to_string(),
-            confidence: "medium".to_string(),
-            reasoning: "Small cluster default.".to_string(),
+        return Ok(ClusterNamingOutcome {
+            suggestion: EventNameSuggestion {
+                folder_name: format!("{year} - Misc"),
+                confidence: "medium".to_string(),
+                reasoning: "Small cluster default.".to_string(),
+                event_type: Some("misc".to_string()),
+                location_used: None,
+                needs_fallback: false,
+                schema_version: Some("1".to_string()),
+                model_used: None,
+                prompt_version: Some(EVENT_NAMING_PROMPT_VERSION.to_string()),
+                fallback_used: false,
+                fallback_model: None,
+            },
+            pass1: None,
         });
     }
-    if is_holiday_cluster(cluster) {
-        return Ok(EventNameSuggestion {
-            folder_name: "Family Christmas".to_string(),
+    let holiday_default = if is_holiday_cluster(cluster) {
+        Some(EventNameSuggestion {
+            folder_name: format!("{year} - Family Christmas"),
             confidence: "high".to_string(),
             reasoning: "Date window matches holiday period.".to_string(),
-        });
-    }
+            event_type: Some("holiday".to_string()),
+            location_used: None,
+            needs_fallback: false,
+            schema_version: Some("1".to_string()),
+            model_used: None,
+            prompt_version: Some(EVENT_NAMING_PROMPT_VERSION.to_string()),
+            fallback_used: false,
+            fallback_model: None,
+        })
+    } else {
+        None
+    };
 
     let sampled = sample_cluster_items(cluster);
     let start_date = cluster.first().map(|x| x.capture_at.date()).expect("cluster item");
@@ -162,6 +262,7 @@ async fn name_cluster(
     let day_count = (end_date - start_date).num_days() + 1;
     let location_hint = find_location_hint(cluster, http, geocoder).await?;
     let request = EventNamingRequest {
+        year,
         start_date: start_date.to_string(),
         end_date: end_date.to_string(),
         day_count,
@@ -169,12 +270,25 @@ async fn name_cluster(
         has_location_data: location_hint.is_some(),
         location_hint,
         sample_image_paths: sampled.into_iter().map(|x| x.current_path).collect(),
+        cluster_metadata: None,
     };
-    let mut suggestion = ai.suggest_event_name_for_cluster(&request).await?;
+    let pass1 = if cluster.len() >= PASS1_MIN_CLUSTER_SIZE {
+        Some(ai.derive_cluster_metadata(&request).await?)
+    } else {
+        None
+    };
+    let mut request_with_metadata = request.clone();
+    request_with_metadata.cluster_metadata = pass1.clone();
+    let mut suggestion = ai.suggest_event_name_for_cluster(&request_with_metadata).await?;
+    if let Some(default_holiday) = holiday_default {
+        if !suggestion.confidence.eq_ignore_ascii_case("high") {
+            suggestion = default_holiday;
+        }
+    }
     if suggestion.folder_name.trim().is_empty() {
         suggestion.folder_name = format!("{year} - Misc");
     }
-    Ok(suggestion)
+    Ok(ClusterNamingOutcome { suggestion, pass1 })
 }
 
 fn apply_low_confidence_fallback_if_needed(
@@ -184,15 +298,46 @@ fn apply_low_confidence_fallback_if_needed(
     naming: &EventNameSuggestion,
 ) -> Result<String> {
     if !naming.confidence.eq_ignore_ascii_case("low") {
-        return Ok(format!("{year} - {}", naming.folder_name.trim()));
+        return Ok(naming.folder_name.trim().to_string());
     }
-    let fallback = format!("{year} - {} Memories", start_date.format("%B"));
+    let fallback = if naming
+        .event_type
+        .as_deref()
+        .map(|x| x.eq_ignore_ascii_case("misc"))
+        .unwrap_or(false)
+    {
+        format!("{year} - {} Memories", start_date.format("%B"))
+    } else {
+        naming.folder_name.trim().to_string()
+    };
     conn.execute(
         "INSERT INTO audit_log(media_item_id, action, old_value, new_value, source, details)
          VALUES(NULL, 'event_name_low_confidence', ?1, ?2, 'ai_event_naming', ?3)",
         params![naming.folder_name, fallback, naming.reasoning],
     )?;
     Ok(fallback)
+}
+
+fn resolve_folder_name_collision(conn: &Connection, year: i32, folder_name: &str) -> Result<String> {
+    let mut candidate = folder_name.trim().to_string();
+    let mut counter = 2;
+    loop {
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM event_groups WHERE year=?1 AND lower(trim(folder_name))=lower(trim(?2)))",
+            params![year, candidate],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Ok(candidate);
+        }
+        runtime_log::warn(
+            "event_grouper",
+            format!("Folder name collision detected for year {year}: '{candidate}'. Applying suffix."),
+        );
+        let base = folder_name.trim();
+        candidate = format!("{base} {counter}");
+        counter += 1;
+    }
 }
 
 async fn find_location_hint(
@@ -552,9 +697,17 @@ mod tests {
     fn low_confidence_uses_date_based_fallback_name() {
         let start = NaiveDate::parse_from_str("2026-02-14", "%Y-%m-%d").expect("date");
         let suggestion = EventNameSuggestion {
-            folder_name: "Unclear".to_string(),
+            folder_name: "2026 - Misc".to_string(),
             confidence: "low".to_string(),
             reasoning: "Ambiguous".to_string(),
+            event_type: Some("misc".to_string()),
+            location_used: None,
+            needs_fallback: true,
+            schema_version: Some("1".to_string()),
+            model_used: None,
+            prompt_version: Some(EVENT_NAMING_PROMPT_VERSION.to_string()),
+            fallback_used: false,
+            fallback_model: None,
         };
         let db_path = {
             let mut p = std::env::temp_dir();
@@ -717,6 +870,21 @@ mod tests {
         ];
         let clusters = cluster_by_days(items, 2);
         assert_eq!(clusters.len(), 2);
+    }
+
+    #[test]
+    fn folder_name_collision_appends_numeric_suffix() {
+        let mut db_path = std::env::temp_dir();
+        db_path.push(format!("memoria-group-collision-{}.db", rand::random::<u64>()));
+        let conn = crate::db::init_db(&db_path).expect("db");
+        conn.execute(
+            "INSERT INTO event_groups(year, name, folder_name, user_approved, item_count)
+             VALUES(2026, 'Birthday Party', '2026 - Birthday Party', 0, 3)",
+            [],
+        )
+        .expect("seed existing");
+        let resolved = resolve_folder_name_collision(&conn, 2026, "2026 - Birthday Party").expect("resolve");
+        assert_eq!(resolved, "2026 - Birthday Party 2");
     }
 
     #[test]

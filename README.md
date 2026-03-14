@@ -4,7 +4,7 @@
 
 > Intelligently organize local photos and videos into a structured, event-based archive.
 
-Memoria is a Windows-first desktop application that indexes local photos and videos, runs image-quality/burst review, lets you review/exclude short or unwanted videos, enforces date metadata, and organizes media into meaningful event folders — all with you in control of every decision.
+Memoria is a Windows-first desktop application with a guided, phase-by-phase workflow. It indexes local photos and videos, runs image-quality/burst review, lets you review/exclude short or unwanted videos, enforces date metadata, and organizes media into meaningful event folders — all with you in control of every decision.
 
 ---
 
@@ -44,6 +44,7 @@ The folder structure Memoria produces looks like this:
 - Detects burst groups and auto-selects a best frame (`is_burst_primary`)
 - Supports filtered review, bulk/individual exclude, restore, and burst actions (`Keep Best Only`, `Keep All`)
 - Image Review completion advances remaining active items to `image_reviewed`
+- Completion shows a busy overlay and transitions directly into Video Review
 
 ### Date Metadata Enforcement
 Amazon Photos, Google Photos, and most photo management tools order images by the `DateTimeOriginal` EXIF field. If that field is missing, your photos end up out of order or dumped into an "unknown date" bucket.
@@ -62,6 +63,7 @@ Memoria clusters your photos into events automatically:
 - Applies deterministic naming for misc/holiday-like groups
 - Uses AI to suggest event names for larger clusters
 - Lets you review and rename event groups before finalize
+- Event Groups includes a phase CTA (`Done - Proceed to Finalize`) and, after finalize completes, changes to `Back to Dashboard`
 
 Photos not associated with any event go into a `[YEAR] - Misc` folder.
 
@@ -74,7 +76,27 @@ Photos not associated with any event go into a `[YEAR] - Misc` folder.
   - longer clips open a modal/lightbox with full controls
 - Exclude actions move files to `/recycle/` with `status='excluded'` and audit log entries
 - Completing Video Review advances remaining active items to `video_reviewed`
+- Proceeding from Video Review immediately runs Date Enforcement (with loading UI) and lands on Date Approval
 - Excluded videos are not included in downstream phases until restored
+
+### Dashboard and Session UX
+- Dashboard uses a `ProgressHero` card as the primary status and action surface
+- Hero memory stack previews are image-only (video items are excluded from those preview cards)
+- Primary CTA behavior:
+  - `Start Organizing` before the first indexing run
+  - `Resume Organizing` while a session is in progress
+  - `Start New Session` after finalization is complete
+- `Start New Session` opens the same reset modal as `Reset Session` (`Reset and Delete Files` vs `Reset App State Only`)
+
+### Busy-State Feedback
+- Global loading overlays appear during major phase work:
+  - Indexing
+  - Image Review completion handoff
+  - Video include/exclude updates
+  - Date Enforcement
+  - Event Group generation
+  - Finalize
+- Loading copy is phase-specific so users always see what operation is running
 
 ### Event Group Review and Reassignment
 - Event Group cards are clickable and open a dedicated detail view for that group
@@ -177,12 +199,15 @@ npm run tauri dev
 6. **Finalize**
    - Copies grouped items into `/organized/<year>/<year - event>/`
    - Updates each item to `status='filed'` and records audit events
+   - After completion, Event Groups CTA switches to `Back to Dashboard`
+   - Dashboard primary CTA becomes `Start New Session` and opens the reset prompt
 
 7. **Reset Session**
    - Clears pipeline DB state using a single transaction
    - Optionally deletes generated folders: `/staging`, `/organized`, `/recycle`
    - Delete-files mode recreates those folders as empty directories
    - Reset dialog now surfaces inline errors and only closes on success
+- This same dialog is available from the dashboard `Start New Session` action post-finalize
 
 ---
 
@@ -193,6 +218,9 @@ npm run lint          # TypeScript checks
 npm run build         # Frontend build
 npm run check:rust    # Rust compile check
 npm run test:rust     # Rust unit tests
+npm run test:ui:browser  # Browser E2E suite
+npm run test:ui:desktop  # Desktop E2E suite
+npm run test:ui      # All Playwright projects
 npm test              # Full local test pass
 ```
 

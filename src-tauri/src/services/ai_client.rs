@@ -18,10 +18,19 @@ pub struct EventNameSuggestion {
     pub folder_name: String,
     pub confidence: String,
     pub reasoning: String,
+    pub event_type: Option<String>,
+    pub location_used: Option<String>,
+    pub needs_fallback: bool,
+    pub schema_version: Option<String>,
+    pub model_used: Option<String>,
+    pub prompt_version: Option<String>,
+    pub fallback_used: bool,
+    pub fallback_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventNamingRequest {
+    pub year: i32,
     pub start_date: String,
     pub end_date: String,
     pub day_count: i64,
@@ -29,6 +38,24 @@ pub struct EventNamingRequest {
     pub has_location_data: bool,
     pub location_hint: Option<String>,
     pub sample_image_paths: Vec<String>,
+    pub cluster_metadata: Option<ClusterMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ClusterMetadata {
+    pub schema_version: Option<String>,
+    pub dominant_context: Option<String>,
+    pub scene_signals: Vec<String>,
+    pub event_candidates: Vec<String>,
+    pub location_candidates: Vec<String>,
+    pub holiday_candidates: Vec<String>,
+    pub activity_candidates: Vec<String>,
+    pub people_focus: Option<String>,
+    pub naming_confidence: Option<String>,
+    pub reasoning: String,
+    pub needs_fallback: bool,
+    pub model_used: Option<String>,
+    pub prompt_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +70,7 @@ pub struct TaskModelConfig {
 pub struct AiRoutingConfig {
     pub date_estimation: TaskModelConfig,
     pub event_naming: TaskModelConfig,
+    pub event_naming_fallback: Option<TaskModelConfig>,
 }
 
 impl Default for AiRoutingConfig {
@@ -56,9 +84,13 @@ impl Default for AiRoutingConfig {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet-4-6".to_string(),
             },
+            event_naming_fallback: None,
         }
     }
 }
+
+pub const EVENT_NAMING_PROMPT_VERSION: &str = "v2.0";
+pub const CLUSTER_METADATA_PROMPT_VERSION: &str = "v1.0";
 
 #[derive(Clone)]
 pub struct AiClient {
@@ -101,6 +133,7 @@ impl AiClient {
 
     pub async fn suggest_event_name(&self, year: i32, sample_size: usize) -> Result<EventNameSuggestion> {
         let request = EventNamingRequest {
+            year,
             start_date: format!("{year}-01-01"),
             end_date: format!("{year}-01-01"),
             day_count: 1,
@@ -108,6 +141,7 @@ impl AiClient {
             has_location_data: false,
             location_hint: None,
             sample_image_paths: Vec::new(),
+            cluster_metadata: None,
         };
         self.suggest_event_name_for_cluster(&request).await
     }
@@ -116,22 +150,66 @@ impl AiClient {
         &self,
         request: &EventNamingRequest,
     ) -> Result<EventNameSuggestion> {
-        if let Ok(name) = self
+        let primary_result = self
             .suggest_name_via_config(request, &self.routing.event_naming)
-            .await
-        {
-                return Ok(name);
+            .await;
+
+        if let Ok(primary) = primary_result {
+            let should_fallback = primary.needs_fallback || primary.confidence.eq_ignore_ascii_case("low");
+            if should_fallback {
+                if let Some(fallback_config) = self.routing.event_naming_fallback.as_ref() {
+                    if let Ok(mut fallback) = self.suggest_name_via_config(request, fallback_config).await {
+                        fallback.fallback_used = true;
+                        fallback.fallback_model = Some(model_id(fallback_config));
+                        return Ok(fallback);
+                    }
+                }
+            }
+            return Ok(primary);
         }
+
+        if let Some(fallback_config) = self.routing.event_naming_fallback.as_ref() {
+            if let Ok(mut fallback) = self.suggest_name_via_config(request, fallback_config).await {
+                fallback.fallback_used = true;
+                fallback.fallback_model = Some(model_id(fallback_config));
+                return Ok(fallback);
+            }
+        }
+
         let base = if request.total_count > 8 {
             "Family Gathering"
         } else {
             "Weekend Moments"
         };
         Ok(EventNameSuggestion {
-            folder_name: base.to_string(),
+            folder_name: format!("{} - {base}", request.year),
             confidence: "medium".to_string(),
             reasoning: "Fallback heuristic used because AI provider was unavailable.".to_string(),
+            event_type: Some("misc".to_string()),
+            location_used: None,
+            needs_fallback: false,
+            schema_version: Some("1".to_string()),
+            model_used: None,
+            prompt_version: Some(EVENT_NAMING_PROMPT_VERSION.to_string()),
+            fallback_used: false,
+            fallback_model: None,
         })
+    }
+
+    pub async fn derive_cluster_metadata(&self, request: &EventNamingRequest) -> Result<ClusterMetadata> {
+        match self
+            .derive_metadata_via_config(request, &self.routing.event_naming)
+            .await
+        {
+            Ok(metadata) => Ok(metadata),
+            Err(_) => Ok(ClusterMetadata {
+                schema_version: Some("1".to_string()),
+                reasoning: "Pass-1 metadata unavailable; proceeding with pass-2 naming.".to_string(),
+                needs_fallback: true,
+                prompt_version: Some(CLUSTER_METADATA_PROMPT_VERSION.to_string()),
+                ..ClusterMetadata::default()
+            }),
+        }
     }
 
     async fn estimate_date_via_config(
@@ -175,6 +253,28 @@ impl AiClient {
                 };
                 self.suggest_name_via_openai(key, &config.model, request)
                     .await
+            }
+        }
+    }
+
+    async fn derive_metadata_via_config(
+        &self,
+        request: &EventNamingRequest,
+        config: &TaskModelConfig,
+    ) -> Result<ClusterMetadata> {
+        match config.provider.to_ascii_lowercase().as_str() {
+            "anthropic" => {
+                let Some(key) = self.anthropic_api_key.as_deref() else {
+                    anyhow::bail!("Anthropic API key is missing for pass-1 cluster metadata");
+                };
+                self.derive_metadata_via_anthropic(key, &config.model, request)
+                    .await
+            }
+            _ => {
+                let Some(key) = self.openai_api_key.as_deref() else {
+                    anyhow::bail!("OpenAI API key is missing for pass-1 cluster metadata");
+                };
+                self.derive_metadata_via_openai(key, &config.model, request).await
             }
         }
     }
@@ -268,23 +368,56 @@ impl AiClient {
             .as_str()
             .context("Missing content in OpenAI response")?;
         let parsed: serde_json::Value = serde_json::from_str(content)?;
-        Ok(EventNameSuggestion {
-            folder_name: parsed
-                .get("folder_name")
-                .and_then(|x| x.as_str())
-                .unwrap_or("Misc")
-                .to_string(),
-            confidence: parsed
-                .get("confidence")
-                .and_then(|x| x.as_str())
-                .unwrap_or("medium")
-                .to_string(),
-            reasoning: parsed
-                .get("reasoning")
-                .and_then(|x| x.as_str())
-                .unwrap_or("No reasoning provided.")
-                .to_string(),
-        })
+        let mut validated = validate_event_naming_response(&parsed, request.year);
+        validated.model_used = Some(model_id(&TaskModelConfig {
+            provider: "openai".to_string(),
+            model: model.to_string(),
+        }));
+        Ok(validated)
+    }
+
+    async fn derive_metadata_via_openai(
+        &self,
+        api_key: &str,
+        model: &str,
+        request: &EventNamingRequest,
+    ) -> Result<ClusterMetadata> {
+        let prompt = build_cluster_metadata_prompt(request);
+        let mut content = vec![json!({ "type": "text", "text": prompt })];
+        for path in request.sample_image_paths.iter() {
+            if let Ok(data_url) = image_to_data_url(path).await {
+                content.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": data_url }
+                }));
+            }
+        }
+        let body = json!({
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": content
+            }],
+            "temperature": 0.2,
+            "response_format": { "type": "json_object" }
+        });
+        let v = self
+            .http
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<serde_json::Value>()
+            .await?;
+        let content = v["choices"][0]["message"]["content"]
+            .as_str()
+            .context("Missing content in OpenAI response")?;
+        let parsed: serde_json::Value = serde_json::from_str(content)?;
+        let mut validated = validate_cluster_metadata_response(&parsed);
+        validated.model_used = Some(format!("openai:{model}"));
+        Ok(validated)
     }
 
     async fn estimate_date_via_anthropic(
@@ -350,23 +483,43 @@ impl AiClient {
             }]
         });
         let parsed = self.anthropic_message_json(api_key, &body).await?;
-        Ok(EventNameSuggestion {
-            folder_name: parsed
-                .get("folder_name")
-                .and_then(|x| x.as_str())
-                .unwrap_or("Misc")
-                .to_string(),
-            confidence: parsed
-                .get("confidence")
-                .and_then(|x| x.as_str())
-                .unwrap_or("medium")
-                .to_string(),
-            reasoning: parsed
-                .get("reasoning")
-                .and_then(|x| x.as_str())
-                .unwrap_or("No reasoning provided.")
-                .to_string(),
-        })
+        let mut validated = validate_event_naming_response(&parsed, request.year);
+        validated.model_used = Some(model_id(&TaskModelConfig {
+            provider: "anthropic".to_string(),
+            model: model.to_string(),
+        }));
+        Ok(validated)
+    }
+
+    async fn derive_metadata_via_anthropic(
+        &self,
+        api_key: &str,
+        model: &str,
+        request: &EventNamingRequest,
+    ) -> Result<ClusterMetadata> {
+        let prompt = build_cluster_metadata_prompt(request);
+        let mut content = vec![json!({"type":"text","text": prompt})];
+        for path in request.sample_image_paths.iter() {
+            if let Ok((media_type, data)) = image_to_base64_payload(path).await {
+                content.push(json!({
+                    "type":"image",
+                    "source":{"type":"base64","media_type":media_type,"data":data}
+                }));
+            }
+        }
+        let body = json!({
+            "model": model,
+            "max_tokens": 400,
+            "temperature": 0.2,
+            "messages": [{
+                "role":"user",
+                "content": content
+            }]
+        });
+        let parsed = self.anthropic_message_json(api_key, &body).await?;
+        let mut validated = validate_cluster_metadata_response(&parsed);
+        validated.model_used = Some(format!("anthropic:{model}"));
+        Ok(validated)
     }
 
     async fn anthropic_message_json(
@@ -414,15 +567,218 @@ fn build_event_naming_prompt(request: &EventNamingRequest) -> String {
     } else {
         String::new()
     };
+    let metadata_block = request
+        .cluster_metadata
+        .as_ref()
+        .map(|metadata| {
+            format!(
+                "\nOptional structured clues from a previous analysis pass:\n- dominant_context: {}\n- scene_signals: {}\n- event_candidates: {}\n- location_candidates: {}\n- holiday_candidates: {}\n- activity_candidates: {}\n- people_focus: {}\n- naming_confidence: {}\n- reasoning: {}",
+                metadata.dominant_context.clone().unwrap_or_else(|| "unknown".to_string()),
+                metadata.scene_signals.join(", "),
+                metadata.event_candidates.join(", "),
+                metadata.location_candidates.join(", "),
+                metadata.holiday_candidates.join(", "),
+                metadata.activity_candidates.join(", "),
+                metadata.people_focus.clone().unwrap_or_else(|| "unknown".to_string()),
+                metadata
+                    .naming_confidence
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+                metadata.reasoning
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "You are an expert at identifying life events from photo collections.\n\nI will provide you with a sample of photos from a single group, along with the date range they were taken.\n\nDate range: {} to {} ({} days)\nNumber of photos in group: {}\nLocation data available: {}\n{}\n\nYour job is to identify what event or occasion these photos represent and suggest a short, specific folder name.\n\nGuidelines:\n- Be SPECIFIC. \"Portland Trip\" is better than \"Travel\". \"Thatcher Birthday\" is better than \"Birthday\". \"Mexico Beach Vacation\" is better than \"Vacation\".\n- Look for visual cues: birthday cakes, candles, presents, decorations, costumes, holiday decorations, beach/ocean, mountains, landmarks, restaurants, sports fields, school settings, etc.\n- Look for contextual cues: if photos span 5-10 days in a warm location with beaches, it is likely a vacation. If photos show a cake with candles and people gathered, it is a birthday.\n- If you can identify a location (city, country, landmark, region), include it in the name.\n- If you can identify a person the event is centered on, include their name if it appears context is a personal celebration.\n- For holidays use standard names: \"Christmas\", \"Thanksgiving\", \"Fourth of July\", \"Easter\", \"Halloween\".\n- For recurring personal events use: \"Birthday\", \"Anniversary\", \"Graduation\".\n- If truly ambiguous after careful analysis, use \"Misc\".\n\nRespond with ONLY a JSON object in this exact format, no other text:\n{{\n  \"folder_name\": \"Short Event Name\",\n  \"confidence\": \"high|medium|low\",\n  \"reasoning\": \"One sentence explaining what visual or contextual cues led to this name\"\n}}",
+        "You are assisting a desktop photo organization application named Memoria.\n\nMemoria already grouped these assets into a candidate event cluster using deterministic time-proximity rules after date verification. Your job is to identify the most likely real-world event or occasion represented by this candidate cluster and return a deterministic folder/event name suggestion.\n\nYou are given:\n- a representative sample of assets from one candidate cluster\n- the cluster year: {}\n- the cluster date range: {} to {}\n- the total number of assets: {}\n- whether location data exists: {}\n- optional location hint: {}\n{}\n\nFolder naming requirements:\n- Output folder_name in this exact format:\n  YYYY - OptionalLocation EventName\n- Use the year only, not full dates.\n- If a reliable location is known and materially improves specificity, include it.\n- If location is not reliable or not useful, omit it cleanly.\n\nRules:\n- Be specific, not generic.\n- Prefer a concrete event or occasion over broad categories.\n- Use visual cues such as cakes, candles, decorations, costumes, holiday themes, sports settings, school settings, landmarks, beaches, mountains, restaurants, animals, signs, and repeated environments.\n- Use contextual cues such as trip length, date clustering, repeated people/settings, weather/seasonal signals, and location hints.\n- Use standard names for major holidays when appropriate: Christmas, Thanksgiving, Fourth of July, Easter, Halloween.\n- Use standard names for recurring personal events when appropriate: Birthday Party, Anniversary, Graduation, Family Vacation, School Event, Soccer Tournament.\n- Do not invent personal names from appearance alone.\n- If the event is ambiguous but still has a likely category, choose the most specific defensible name.\n- If truly ambiguous after careful analysis, use: {} - Misc.\n- Set needs_fallback=true when confidence is low or the result is ambiguous.\n- Output valid JSON only.\n\nRespond with ONLY a JSON object in this exact shape, no extra text:\n{{\n  \"schema_version\": \"1\",\n  \"folder_name\": \"YYYY - OptionalLocation EventName\",\n  \"confidence\": \"high|medium|low\",\n  \"event_type\": \"holiday|birthday|vacation|sports|school|family|anniversary|graduation|misc|other\",\n  \"location_used\": \"string or null\",\n  \"reasoning\": \"One sentence explaining the strongest visual/contextual cues behind the result.\",\n  \"needs_fallback\": true\n}}",
+        request.year,
         request.start_date,
         request.end_date,
-        request.day_count,
+        request.total_count,
+        if request.has_location_data { "true" } else { "false" },
+        location_line,
+        metadata_block,
+        request.year
+    )
+}
+
+fn build_cluster_metadata_prompt(request: &EventNamingRequest) -> String {
+    let location_line = request.location_hint.clone().unwrap_or_default();
+    format!(
+        "You are assisting a desktop photo organization application named Memoria.\n\nMemoria already grouped these assets into a candidate event cluster using deterministic time-proximity rules after date verification. Your job is NOT to move files or create folders. Your job is to analyze the provided representative assets and cluster context, then return structured event clues that will later be used for deterministic event naming.\n\nYou are given:\n- a sample of representative images and/or video keyframes from one candidate cluster\n- cluster year: {}\n- cluster date range: {} to {}\n- total asset count in the cluster: {}\n- whether location data exists: {}\n- optional location hint: {}\n\nImportant rules:\n- Be specific but conservative.\n- Do not invent personal names from faces.\n- Only use a location when it is strongly supported by metadata/context.\n- Prefer concrete event clues over generic labels.\n- If the event is ambiguous, return multiple plausible event candidates.\n- Output valid JSON only.\n\nReturn JSON in exactly this shape:\n{{\n  \"schema_version\": \"1\",\n  \"dominant_context\": \"holiday|birthday|vacation|sports|school|family|anniversary|graduation|misc|other\",\n  \"scene_signals\": [\"string\"],\n  \"event_candidates\": [\"string\"],\n  \"location_candidates\": [\"string\"],\n  \"holiday_candidates\": [\"string\"],\n  \"activity_candidates\": [\"string\"],\n  \"people_focus\": \"family|individual|mixed|unknown\",\n  \"naming_confidence\": \"high|medium|low\",\n  \"reasoning\": \"One sentence explaining the strongest visual/contextual clues.\",\n  \"needs_fallback\": true\n}}",
+        request.year,
+        request.start_date,
+        request.end_date,
         request.total_count,
         if request.has_location_data { "true" } else { "false" },
         location_line
     )
+}
+
+fn validate_event_naming_response(parsed: &serde_json::Value, year: i32) -> EventNameSuggestion {
+    let mut folder_name = parsed
+        .get("folder_name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("Misc")
+        .trim()
+        .to_string();
+    if folder_name.is_empty() {
+        folder_name = "Misc".to_string();
+    }
+    let mut confidence = parsed
+        .get("confidence")
+        .and_then(|x| x.as_str())
+        .unwrap_or("medium")
+        .to_ascii_lowercase();
+    if !matches!(confidence.as_str(), "high" | "medium" | "low") {
+        confidence = "medium".to_string();
+    }
+    let event_type = parsed
+        .get("event_type")
+        .and_then(|x| x.as_str())
+        .map(|x| x.to_ascii_lowercase())
+        .filter(|x| {
+            matches!(
+                x.as_str(),
+                "holiday"
+                    | "birthday"
+                    | "vacation"
+                    | "sports"
+                    | "school"
+                    | "family"
+                    | "anniversary"
+                    | "graduation"
+                    | "misc"
+                    | "other"
+            )
+        });
+    let location_used = parsed
+        .get("location_used")
+        .and_then(|x| x.as_str())
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty() && x.to_ascii_lowercase() != "null");
+    let reasoning = parsed
+        .get("reasoning")
+        .and_then(|x| x.as_str())
+        .unwrap_or("No reasoning provided.")
+        .trim()
+        .to_string();
+    let schema_version = parsed
+        .get("schema_version")
+        .and_then(|x| x.as_str())
+        .map(ToString::to_string)
+        .or_else(|| Some("1".to_string()));
+    let needs_fallback = parsed
+        .get("needs_fallback")
+        .and_then(|x| x.as_bool())
+        .unwrap_or_else(|| confidence == "low");
+    folder_name = sanitize_folder_name(folder_name);
+    if !folder_name.starts_with(&format!("{year} - ")) {
+        folder_name = format!("{year} - {folder_name}");
+    }
+    EventNameSuggestion {
+        folder_name,
+        confidence,
+        reasoning,
+        event_type,
+        location_used,
+        needs_fallback,
+        schema_version,
+        model_used: None,
+        prompt_version: Some(EVENT_NAMING_PROMPT_VERSION.to_string()),
+        fallback_used: false,
+        fallback_model: None,
+    }
+}
+
+fn validate_cluster_metadata_response(parsed: &serde_json::Value) -> ClusterMetadata {
+    let dominant_context = parsed
+        .get("dominant_context")
+        .and_then(|x| x.as_str())
+        .map(|x| x.to_ascii_lowercase())
+        .filter(|x| {
+            matches!(
+                x.as_str(),
+                "holiday"
+                    | "birthday"
+                    | "vacation"
+                    | "sports"
+                    | "school"
+                    | "family"
+                    | "anniversary"
+                    | "graduation"
+                    | "misc"
+                    | "other"
+            )
+        });
+    let people_focus = parsed
+        .get("people_focus")
+        .and_then(|x| x.as_str())
+        .map(|x| x.to_ascii_lowercase())
+        .filter(|x| matches!(x.as_str(), "family" | "individual" | "mixed" | "unknown"));
+    let naming_confidence = parsed
+        .get("naming_confidence")
+        .and_then(|x| x.as_str())
+        .map(|x| x.to_ascii_lowercase())
+        .filter(|x| matches!(x.as_str(), "high" | "medium" | "low"));
+    ClusterMetadata {
+        schema_version: parsed
+            .get("schema_version")
+            .and_then(|x| x.as_str())
+            .map(ToString::to_string)
+            .or_else(|| Some("1".to_string())),
+        dominant_context,
+        scene_signals: read_string_array(parsed, "scene_signals"),
+        event_candidates: read_string_array(parsed, "event_candidates"),
+        location_candidates: read_string_array(parsed, "location_candidates"),
+        holiday_candidates: read_string_array(parsed, "holiday_candidates"),
+        activity_candidates: read_string_array(parsed, "activity_candidates"),
+        people_focus,
+        naming_confidence,
+        reasoning: parsed
+            .get("reasoning")
+            .and_then(|x| x.as_str())
+            .unwrap_or("No reasoning provided.")
+            .to_string(),
+        needs_fallback: parsed
+            .get("needs_fallback")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false),
+        model_used: None,
+        prompt_version: Some(CLUSTER_METADATA_PROMPT_VERSION.to_string()),
+    }
+}
+
+fn read_string_array(parsed: &serde_json::Value, key: &str) -> Vec<String> {
+    parsed
+        .get(key)
+        .and_then(|x| x.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn sanitize_folder_name(name: String) -> String {
+    let filtered: String = name
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '-',
+            _ => ch,
+        })
+        .collect();
+    filtered
+        .trim()
+        .trim_end_matches('.')
+        .trim_end_matches(' ')
+        .to_string()
+}
+
+fn model_id(config: &TaskModelConfig) -> String {
+    format!("{}:{}", config.provider, config.model)
 }
 
 async fn image_to_base64_payload(path: &str) -> Result<(String, String)> {
@@ -443,7 +799,10 @@ async fn image_to_base64_payload(path: &str) -> Result<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_event_naming_prompt, AiClient, AiRoutingConfig, EventNamingRequest};
+    use super::{
+        build_event_naming_prompt, sanitize_folder_name, validate_event_naming_response, AiClient,
+        AiRoutingConfig, EventNamingRequest,
+    };
 
     #[tokio::test]
     async fn estimate_date_and_event_name_have_local_fallbacks() {
@@ -466,6 +825,7 @@ mod tests {
     #[test]
     fn event_prompt_includes_date_range_and_location_line() {
         let request = EventNamingRequest {
+            year: 2026,
             start_date: "2026-02-01".to_string(),
             end_date: "2026-02-08".to_string(),
             day_count: 8,
@@ -473,12 +833,33 @@ mod tests {
             has_location_data: true,
             location_hint: Some("GPS data suggests these photos were taken in: Portland, United States".to_string()),
             sample_image_paths: Vec::new(),
+            cluster_metadata: None,
         };
         let prompt = build_event_naming_prompt(&request);
-        assert!(prompt.contains("Date range: 2026-02-01 to 2026-02-08 (8 days)"));
-        assert!(prompt.contains("Number of photos in group: 42"));
-        assert!(prompt.contains("Location data available: true"));
+        assert!(prompt.contains("cluster year: 2026"));
+        assert!(prompt.contains("cluster date range: 2026-02-01 to 2026-02-08"));
+        assert!(prompt.contains("total number of assets: 42"));
         assert!(prompt.contains("GPS data suggests these photos were taken in: Portland, United States"));
+        assert!(prompt.contains("\"schema_version\": \"1\""));
+    }
+
+    #[test]
+    fn validate_event_naming_response_applies_defaults_and_prefixes_year() {
+        let parsed = serde_json::json!({
+            "folder_name": "Portland/Oregon Trip",
+            "confidence": "unknown",
+            "reasoning": "Visual cues indicate travel."
+        });
+        let result = validate_event_naming_response(&parsed, 2025);
+        assert_eq!(result.folder_name, "2025 - Portland-Oregon Trip");
+        assert_eq!(result.confidence, "medium");
+        assert_eq!(result.event_type, None);
+    }
+
+    #[test]
+    fn sanitize_folder_name_replaces_windows_invalid_characters() {
+        let sanitized = sanitize_folder_name(r#"2025 - Portland: Family/Trip*?"#.to_string());
+        assert_eq!(sanitized, "2025 - Portland- Family-Trip--");
     }
 
 }

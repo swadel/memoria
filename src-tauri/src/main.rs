@@ -56,6 +56,11 @@ impl AppState {
                     "ai_model_event_naming",
                     routing.event_naming.clone(),
                 );
+                routing.event_naming_fallback = task_model_from_settings_optional(
+                    &conn,
+                    "ai_model_event_naming_fallback_provider",
+                    "ai_model_event_naming_fallback",
+                );
                 (openai, anthropic, routing)
             }
             Err(_) => (
@@ -85,6 +90,25 @@ fn task_model_from_settings(
         .filter(|v| !v.trim().is_empty())
         .unwrap_or(fallback.model);
     TaskModelConfig { provider, model }
+}
+
+fn task_model_from_settings_optional(
+    conn: &Connection,
+    provider_key: &str,
+    model_key: &str,
+) -> Option<TaskModelConfig> {
+    let provider = crate::db::get_setting(conn, provider_key)
+        .ok()
+        .flatten()
+        .filter(|v| !v.trim().is_empty());
+    let model = crate::db::get_setting(conn, model_key)
+        .ok()
+        .flatten()
+        .filter(|v| !v.trim().is_empty());
+    match (provider, model) {
+        (Some(provider), Some(model)) => Some(TaskModelConfig { provider, model }),
+        _ => None,
+    }
 }
 
 fn app_dir() -> Result<PathBuf> {
