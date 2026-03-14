@@ -1,6 +1,17 @@
 import type { Page } from "@playwright/test";
 
-type BrowserFixtureProfile = "all" | "settings-only" | "responsive" | "pre-video" | "pre-index" | "reset-error" | "reset-slow" | "ingest-slow" | "complete" | "grouping-empty";
+type BrowserFixtureProfile =
+  | "all"
+  | "settings-only"
+  | "responsive"
+  | "pre-video"
+  | "pre-index"
+  | "phase-busy"
+  | "reset-error"
+  | "reset-slow"
+  | "ingest-slow"
+  | "complete"
+  | "grouping-empty";
 
 type DateEstimate = {
   mediaItemId: number;
@@ -289,6 +300,8 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
         return build ? build(fixtureProfile) : null;
       })();
       if (!state) return;
+      const delayed = (value: unknown, ms = 320) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+      const withPhaseDelay = (value: unknown) => (fixtureProfile === "phase-busy" ? delayed(value) : Promise.resolve(value));
 
       (window as any).__MEMORIA_TEST_API__ = {
         invoke(command: string, args?: Record<string, unknown>) {
@@ -403,15 +416,16 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                 };
                 state.stats = { ...state.stats, grouped: 3 };
               }
-              return Promise.resolve();
+              return withPhaseDelay(undefined);
             case "finalize_organization":
+              return withPhaseDelay(undefined);
             case "run_image_review_scan":
-              return Promise.resolve();
+              return withPhaseDelay(undefined);
             case "run_date_enforcement":
               if (fixtureProfile === "grouping-empty") {
                 state.stats = { ...state.stats, dateVerified: 8, dateNeedsReview: 0 };
               }
-              return Promise.resolve();
+              return withPhaseDelay(undefined);
             case "complete_image_review_and_start_video_review":
               state.stats.imagePhaseState = "complete";
               state.stats.videoPhaseState = "in_progress";
@@ -422,7 +436,7 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               return Promise.resolve();
             case "complete_video_review_and_run_grouping":
               state.stats.videoPhaseState = "complete";
-              return Promise.resolve();
+              return withPhaseDelay(undefined);
             case "exclude_videos": {
               const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
               state.videoItems = state.videoItems.map((item: VideoReviewItem) =>
@@ -431,7 +445,7 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               state.stats.videoExcluded = state.videoItems.filter((item: VideoReviewItem) => item.status === "excluded").length;
               state.stats.videoFlagged = state.videoItems.filter((item: VideoReviewItem) => item.status === "image_reviewed" && (item.fileSizeBytes <= 5 * 1024 * 1024 || item.durationSecs <= 10)).length;
               state.stats.videoUnreviewedFlagged = state.stats.videoFlagged;
-              return Promise.resolve(ids.length);
+              return withPhaseDelay(ids.length);
             }
             case "restore_videos": {
               const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
@@ -441,7 +455,7 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               state.stats.videoExcluded = state.videoItems.filter((item: VideoReviewItem) => item.status === "excluded").length;
               state.stats.videoFlagged = state.videoItems.filter((item: VideoReviewItem) => item.status === "image_reviewed" && (item.fileSizeBytes <= 5 * 1024 * 1024 || item.durationSecs <= 10)).length;
               state.stats.videoUnreviewedFlagged = state.stats.videoFlagged;
-              return Promise.resolve(ids.length);
+              return withPhaseDelay(ids.length);
             }
             case "keep_best_only": {
               const burstGroupId = String(args?.burstGroupId ?? args?.burst_group_id ?? "");

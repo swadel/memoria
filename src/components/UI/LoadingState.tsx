@@ -3,25 +3,19 @@ import logo from "../../assets/flower_1024.png";
 
 interface LoadingStateProps {
   message?: string;
+  hint?: string;
 }
 
-export const LoadingState: React.FC<LoadingStateProps> = ({ message = "Processing..." }) => {
+export const LoadingState: React.FC<LoadingStateProps> = ({
+  message = "Processing...",
+  hint = "This may take a moment depending on your library size."
+}) => {
   return (
-    <div className="flex min-h-[60vh] flex-col items-center justify-center p-16 space-y-6" data-testid="loading-state-root">
-      <div className="relative">
-        <div className="absolute inset-0 bg-petal-blue/20 blur-3xl rounded-full animate-pulse" />
-        <img
-          src={logo}
-          className="relative object-contain mix-blend-multiply animate-pulse logoSmooth"
-          style={{ animationDuration: "3s", width: "32px", height: "32px", maxWidth: "32px", maxHeight: "32px" }}
-          data-testid="loading-state-logo"
-          alt="Memoria Logo"
-        />
-      </div>
-
-      <div className="text-center space-y-2">
+    <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 py-16" data-testid="loading-state-root">
+      <div className="flex flex-col items-center space-y-3 rounded-2xl bg-white/55 px-10 py-8 shadow-paper backdrop-blur-md">
+        <img src={logo} className="object-contain mix-blend-multiply animate-pulse logoSmooth" style={{ animationDuration: "3s", width: "32px", height: "32px" }} data-testid="loading-state-logo" alt="Memoria Logo" />
         <p className="text-lg font-medium text-slate-700 animate-in fade-in slide-in-from-bottom-2">{message}</p>
-        <p className="text-sm text-slate-400">This may take a moment depending on your library size.</p>
+        <p className="text-sm text-slate-500" data-testid="loading-state-hint">{hint}</p>
       </div>
     </div>
   );

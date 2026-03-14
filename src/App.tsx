@@ -529,11 +529,43 @@ export function App() {
     const completeCount = workflowSteps.filter((step) => step.state === "complete").length;
     return (completeCount / 6) * 100;
   }, [workflowSteps]);
-  const loadingMessage = useMemo(() => {
-    if (busyAction === "ingest") return "Indexing your media...";
-    if (busyAction === "date-enforcement") return "Estimating dates with AI...";
-    if (busyAction === "group") return "Generating event names with AI...";
-    if (busyAction === "finalize") return "Finalizing folders and organizing files...";
+  const loadingStateCopy = useMemo(() => {
+    if (busyAction === "ingest") {
+      return {
+        message: "Indexing your media...",
+        hint: "We are scanning and staging your files so the review phases can begin."
+      };
+    }
+    if (busyAction === "image-review-scan") {
+      return {
+        message: "Preparing image review...",
+        hint: "We are checking image quality and burst candidates."
+      };
+    }
+    if (busyAction === "video-review") {
+      return {
+        message: "Updating video review...",
+        hint: "Applying your include/exclude changes now."
+      };
+    }
+    if (busyAction === "date-enforcement") {
+      return {
+        message: "Enforcing dates...",
+        hint: "We are estimating and validating capture dates."
+      };
+    }
+    if (busyAction === "group") {
+      return {
+        message: "Building event groups...",
+        hint: "We are clustering items and preparing group names."
+      };
+    }
+    if (busyAction === "finalize") {
+      return {
+        message: "Finalizing organization...",
+        hint: "Moving files into final folders and wrapping up."
+      };
+    }
     return null;
   }, [busyAction]);
 
@@ -680,9 +712,9 @@ export function App() {
         </button>
       }
     >
-      {loadingMessage ? (
+      {loadingStateCopy ? (
         <div className="loadingStateOverlay mica-surface bg-white/40 backdrop-blur-md" data-testid="global-loading-state">
-          <LoadingState message={loadingMessage} />
+          <LoadingState message={loadingStateCopy.message} hint={loadingStateCopy.hint} />
         </div>
       ) : null}
       <AnimatePresence mode="wait" initial={false}>
@@ -747,7 +779,7 @@ export function App() {
         <div className="card pageTransition" data-testid="date-approval-card">
           <PageHeader
             title="Date Approval"
-            summary={`${dateItems.length} items are awaiting approval. Confirm, edit, or skip each date estimate.`}
+            summary={`${dateItems.length} items are awaiting approval. Confirm the right date or skip to keep progress moving.`}
           />
           {dateItems.length === 0 ? (
             <EmptyStateBanner />
@@ -806,7 +838,7 @@ export function App() {
         <div className="card pageTransition" data-testid="image-review-card">
           <PageHeader
             title="Image Review"
-            summary={`${imageItems.filter((item) => item.status !== "excluded").length} active images in review.`}
+            summary={`${imageItems.filter((item) => item.status !== "excluded").length} active images in review. Keep the best shots and exclude anything you do not want grouped.`}
           />
           <ImageReviewView
             items={imageItems}
@@ -859,7 +891,7 @@ export function App() {
         <div className="card pageTransition" data-testid="video-review-card">
           <PageHeader
             title="Video Review"
-            summary={`${videoItems.filter((item) => item.status !== "excluded").length} active videos in this stage.`}
+            summary={`${videoItems.filter((item) => item.status !== "excluded").length} active videos in review. Remove unwanted clips before continuing to date checks.`}
           />
           <VideoReviewView
             items={videoItems}
@@ -893,7 +925,11 @@ export function App() {
         <div className="card pageTransition" data-testid="event-groups-card">
           <PageHeader
             title="Event Groups"
-            summary={activeGroup ? `${activeGroup.itemCount} active items in this group.` : `${groups.length} groups in review.`}
+            summary={
+              activeGroup
+                ? `${activeGroup.itemCount} active items in this group. Move, exclude, or restore items before finalizing this event.`
+                : `${groups.length} groups in review. Open each group to confirm the story and clean up outliers.`
+            }
           />
           {activeGroup ? (
             <EventGroupDetailView

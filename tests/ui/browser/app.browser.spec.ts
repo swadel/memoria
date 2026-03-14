@@ -125,6 +125,7 @@ test.describe("Memoria browser UI", () => {
   test("image review supports flagged and burst workflows", async ({ page }) => {
     await page.getByTestId("tab-images").click();
     await expect(page.getByTestId("image-review-view")).toBeVisible();
+    await expect(page.getByText("Keep the best shots and exclude anything you do not want grouped.")).toBeVisible();
 
     await page.getByTestId("image-filter-flagged").click();
     await expect(page.getByTestId("image-item-503")).toBeVisible();
@@ -144,6 +145,20 @@ test.describe("Memoria browser UI", () => {
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByTestId("image-done-proceed").click();
     await expect(page.getByTestId("status-pill")).toContainText("Image review complete");
+  });
+
+  test("video phase busy overlay uses compact helper style", async ({ context }) => {
+    const busyPage = await context.newPage();
+    await installBrowserApiMock(busyPage, "phase-busy");
+    await busyPage.goto("/");
+    await busyPage.getByTestId("tab-videos").click();
+    await busyPage.getByTestId("video-select-all-filtered").click();
+    await busyPage.getByTestId("video-exclude-selected").click();
+    await expect(busyPage.getByTestId("global-loading-state")).toBeVisible();
+    await expect(busyPage.getByTestId("loading-state-logo")).toBeVisible();
+    await expect(busyPage.getByText("Updating video review...")).toBeVisible();
+    await expect(busyPage.getByTestId("loading-state-hint")).toContainText("include/exclude changes");
+    await busyPage.close();
   });
 
   test("video review filter mode is mutually exclusive", async ({ page }) => {
