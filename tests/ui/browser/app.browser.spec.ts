@@ -107,7 +107,12 @@ test.describe("Memoria browser UI", () => {
     await installBrowserApiMock(completePage, "complete");
     await completePage.goto("/");
     await expect(completePage.getByTestId("dashboard-progress-copy")).toContainText("Your archive is fully organized!");
+    await expect(completePage.getByTestId("dashboard-progress-action")).toHaveText("Start New Session");
     await expect(completePage.getByTestId("finalize-success-toast")).toBeVisible();
+    await completePage.getByTestId("dashboard-progress-action").click();
+    await expect(completePage.getByTestId("reset-session-dialog")).toBeVisible();
+    await expect(completePage.getByTestId("reset-session-delete-files")).toBeVisible();
+    await expect(completePage.getByTestId("reset-session-keep-files")).toBeVisible();
     await completePage.close();
   });
 
@@ -120,6 +125,15 @@ test.describe("Memoria browser UI", () => {
     const mixBlendMode = await fallbackLogo.evaluate((el) => getComputedStyle(el).mixBlendMode);
     expect(mixBlendMode).toBe("screen");
     await settingsPage.close();
+  });
+
+  test("dashboard memory stack ignores video items", async ({ context }) => {
+    const videoOnlyPage = await context.newPage();
+    await installBrowserApiMock(videoOnlyPage, "dashboard-video-only");
+    await videoOnlyPage.goto("/");
+    await expect(videoOnlyPage.getByTestId("progress-hero-fallback-logo")).toBeVisible();
+    await expect(videoOnlyPage.locator(".progressHeroMemoryCard")).toHaveCount(0);
+    await videoOnlyPage.close();
   });
 
   test("image review supports flagged and burst workflows", async ({ page }) => {
@@ -145,6 +159,19 @@ test.describe("Memoria browser UI", () => {
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByTestId("image-done-proceed").click();
     await expect(page.getByTestId("status-pill")).toContainText("Image review complete");
+  });
+
+  test("image done shows loading overlay before video review", async ({ context }) => {
+    const imageFlowPage = await context.newPage();
+    await installBrowserApiMock(imageFlowPage, "phase-busy");
+    await imageFlowPage.goto("/");
+    await imageFlowPage.getByTestId("tab-images").click();
+    imageFlowPage.once("dialog", (dialog) => dialog.accept());
+    await imageFlowPage.getByTestId("image-done-proceed").click();
+    await expect(imageFlowPage.getByTestId("global-loading-state")).toBeVisible();
+    await expect(imageFlowPage.getByText("Advancing to video review...")).toBeVisible();
+    await expect(imageFlowPage.getByTestId("video-review-card")).toBeVisible();
+    await imageFlowPage.close();
   });
 
   test("video phase busy overlay uses compact helper style", async ({ context }) => {
@@ -173,6 +200,25 @@ test.describe("Memoria browser UI", () => {
     await expect(flowPage.getByTestId("date-approval-card")).toBeVisible();
     await expect(flowPage.locator("[data-testid^='date-item-']")).toHaveCount(2);
     await flowPage.close();
+  });
+
+  test("event groups can proceed to finalize with loading overlay", async ({ context }) => {
+    const finalizePage = await context.newPage();
+    await installBrowserApiMock(finalizePage, "finalize-busy");
+    await finalizePage.goto("/");
+    await finalizePage.getByTestId("tab-events").click();
+    await expect(finalizePage.getByTestId("event-done-proceed-finalize")).toBeVisible();
+    await finalizePage.getByTestId("event-done-proceed-finalize").click();
+    await expect(finalizePage.getByTestId("global-loading-state")).toBeVisible();
+    await expect(finalizePage.getByText("Finalizing organization...")).toBeVisible();
+    await expect(finalizePage.getByTestId("status-pill")).toContainText("Organization finalized.");
+    await expect(finalizePage.getByTestId("event-done-proceed-finalize")).toHaveText("Back to Dashboard");
+    await finalizePage.getByTestId("event-done-proceed-finalize").click();
+    await expect(finalizePage.getByTestId("dashboard-progress-hero")).toBeVisible();
+    await expect(finalizePage.getByTestId("dashboard-progress-action")).toHaveText("Start New Session");
+    await finalizePage.getByTestId("dashboard-progress-action").click();
+    await expect(finalizePage.getByTestId("reset-session-dialog")).toBeVisible();
+    await finalizePage.close();
   });
 
   test("video review filter mode is mutually exclusive", async ({ page }) => {

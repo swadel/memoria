@@ -173,6 +173,7 @@ export function App() {
   const [showResetPrompt, setShowResetPrompt] = useState(false);
   const [resetError, setResetError] = useState<string>("");
   const [resetMode, setResetMode] = useState<"delete" | "state" | null>(null);
+  const [hasFinalizedSession, setHasFinalizedSession] = useState(false);
   const [showAddGroupForm, setShowAddGroupForm] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupError, setNewGroupError] = useState("");
@@ -282,6 +283,7 @@ export function App() {
       for (const group of groupCandidates) {
         const groupItems = await getEventGroupItems(group.id, false);
         for (const item of groupItems) {
+          if (!item.mimeType.startsWith("image/")) continue;
           itemIds.push(item.id);
           if (itemIds.length >= 3) break;
         }
@@ -305,6 +307,7 @@ export function App() {
   }, [stats.filed, groups]);
 
   async function onStart() {
+    setHasFinalizedSession(false);
     setBusyAction("ingest");
     setPipelineStages((prev) => ({ ...prev, index: "running", image: "idle", video: "idle", date: "idle", group: "idle", finalize: "idle" }));
     try {
@@ -384,6 +387,7 @@ export function App() {
     try {
       await finalizeOrganization();
       await refreshAll();
+      setHasFinalizedSession(true);
       setMessage("Organization finalized.");
       setShowFinalizeToast(true);
     } catch (err) {
@@ -402,6 +406,7 @@ export function App() {
       const result = await resetSession(deleteGeneratedFiles);
       setShowResetPrompt(false);
       await refreshAll();
+      setHasFinalizedSession(false);
       if (result.deletedGeneratedFiles) {
         setMessage(`Session reset. Removed ${result.removedDirectories.length} generated directories.`);
       } else {
@@ -417,6 +422,16 @@ export function App() {
   }
 
   const dashboardPrimaryAction = useMemo(() => {
+    if (hasFinalizedSession || (stats.total > 0 && stats.filed >= stats.total)) {
+      return {
+        label: "Start New Session",
+        onClick: () => {
+          setResetError("");
+          setShowResetPrompt(true);
+        },
+        disabled: busyAction !== null
+      };
+    }
     if (stats.total === 0) {
       return {
         label: "Start Indexing",
@@ -450,8 +465,13 @@ export function App() {
       onClick: () => setTab("events"),
       disabled: busyAction !== null
     };
-  }, [stats.total, stats.imagePhaseState, stats.videoPhaseState, stats.dateNeedsReview, busyAction]);
+  }, [hasFinalizedSession, stats.total, stats.filed, stats.imagePhaseState, stats.videoPhaseState, stats.dateNeedsReview, busyAction]);
   const hasInitiatedIndexing = stats.total > 0 || pipelineStages.index !== "idle" || busyAction === "ingest";
+  const dashboardActionLabel = hasFinalizedSession || (stats.total > 0 && stats.filed >= stats.total)
+    ? "Start New Session"
+    : hasInitiatedIndexing
+      ? "Resume Organizing"
+      : "Start Organizing";
   const workflowSteps = useMemo(() => {
     const states = deriveWorkflowStepStates(pipelineStages, tab);
     const stateById = Object.fromEntries(states.map((step) => [step.id, step.state])) as Record<PipelineStage, WorkflowStepState>;
@@ -540,6 +560,12 @@ export function App() {
       return {
         message: "Preparing image review...",
         hint: "We are checking image quality and burst candidates."
+      };
+    }
+    if (busyAction === "image-review-complete") {
+      return {
+        message: "Advancing to video review...",
+        hint: "Saving image decisions and preparing the next phase."
       };
     }
     if (busyAction === "video-review") {
@@ -743,7 +769,7 @@ export function App() {
                 needingReview={{ images: stats.imageReview, dates: stats.dateNeedsReview }}
                 previewThumbnails={dashboardStackThumbs}
                 progressPercent={globalProgressPct}
-                actionLabel={hasInitiatedIndexing ? "Resume Organizing" : "Start Organizing"}
+                actionLabel={dashboardActionLabel}
                 onAction={() => {
                   if (dashboardPrimaryAction.disabled) return;
                   dashboardPrimaryAction.onClick();
@@ -868,10 +894,15 @@ export function App() {
               setMessage("Item restored");
             }}
             onDone={async () => {
-              await completeImageReviewAndStartVideoReview();
-              await refreshAll();
-              setTab("videos");
-              setMessage("Image review complete. Proceeding to Video Review.");
+              setBusyAction("image-review-complete");
+              try {
+                await completeImageReviewAndStartVideoReview();
+                await refreshAll();
+                setTab("videos");
+                setMessage("Image review complete. Proceeding to Video Review.");
+              } finally {
+                setBusyAction(null);
+              }
             }}
           />
         </div>
@@ -1066,6 +1097,22 @@ export function App() {
                   </motion.div>
                 ))}
               </motion.div>
+              <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+                <MotionPrimaryButton
+                  data-testid="event-done-proceed-finalize"
+                  className="primaryBtn"
+                  disabled={busyAction !== null}
+                  onClick={() => {
+                    if (hasFinalizedSession) {
+                      setTab("dashboard");
+                      return;
+                    }
+                    void onFinalize();
+                  }}
+                >
+                  {hasFinalizedSession ? "Back to Dashboard" : "Done - Proceed to Finalize"}
+                </MotionPrimaryButton>
+              </div>
             </>
           )}
         </div>

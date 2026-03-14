@@ -7,6 +7,8 @@ type BrowserFixtureProfile =
   | "pre-video"
   | "pre-index"
   | "video-to-dates"
+  | "finalize-busy"
+  | "dashboard-video-only"
   | "phase-busy"
   | "reset-error"
   | "reset-slow"
@@ -74,8 +76,10 @@ function buildState(profile: BrowserFixtureProfile) {
   const isGroupingEmpty = profile === "grouping-empty";
   const isPreIndex = profile === "pre-index";
   const isVideoToDates = profile === "video-to-dates";
+  const isFinalizeBusy = profile === "finalize-busy";
+  const isDashboardVideoOnly = profile === "dashboard-video-only";
   const dateItems: DateEstimate[] =
-    profile === "settings-only" || isIngestSlow || isGroupingEmpty || isPreIndex || isVideoToDates
+    profile === "settings-only" || isIngestSlow || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy
       ? []
       : [
           {
@@ -146,6 +150,26 @@ function buildState(profile: BrowserFixtureProfile) {
                   }
                 ]
         };
+  if (isDashboardVideoOnly) {
+    eventGroupItemsByGroupId[401] = [
+      {
+        id: 9901,
+        filename: "clip_001.mp4",
+        currentPath: "C:\\fixture\\output\\staging\\clip_001.mp4",
+        dateTaken: "2026-01-11",
+        mimeType: "video/mp4",
+        status: "grouped"
+      },
+      {
+        id: 9902,
+        filename: "clip_002.mov",
+        currentPath: "C:\\fixture\\output\\staging\\clip_002.mov",
+        dateTaken: "2026-01-12",
+        mimeType: "video/quicktime",
+        status: "grouped"
+      }
+    ];
+  }
 
   const isComplete = profile === "complete";
   const stats = {
@@ -153,8 +177,8 @@ function buildState(profile: BrowserFixtureProfile) {
     indexed: isPreIndex ? 0 : 2,
     imageReview: isComplete || isPreIndex ? 0 : 2,
     imageVerified: isPreIndex ? 0 : 4,
-    dateReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
-    dateNeedsReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
+    dateReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
+    dateNeedsReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
     dateVerified: isComplete ? 8 : isGroupingEmpty || isPreIndex ? 0 : 5,
     grouped: isComplete ? 8 : isGroupingEmpty || isPreIndex ? 0 : 2,
     filed: isComplete ? 8 : isPreIndex ? 0 : 1,
@@ -164,11 +188,15 @@ function buildState(profile: BrowserFixtureProfile) {
     videoFlagged: 2,
     videoExcluded: 1,
     videoUnreviewedFlagged: 2,
-    videoPhaseState: (isComplete || isGroupingEmpty ? "complete" : profile === "pre-video" || isIngestSlow || isPreIndex ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
+    videoPhaseState: (isComplete || isGroupingEmpty || isFinalizeBusy ? "complete" : profile === "pre-video" || isIngestSlow || isPreIndex ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
   };
   if (isVideoToDates) {
     stats.imagePhaseState = "complete";
     stats.videoPhaseState = "in_progress";
+  }
+  if (isFinalizeBusy) {
+    stats.imagePhaseState = "complete";
+    stats.videoPhaseState = "complete";
   }
 
   const imageItems: ImageReviewItem[] = [
@@ -308,7 +336,9 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
       if (!state) return;
       const delayed = (value: unknown, ms = 320) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
       const withPhaseDelay = (value: unknown) =>
-        fixtureProfile === "phase-busy" || fixtureProfile === "video-to-dates" ? delayed(value) : Promise.resolve(value);
+        fixtureProfile === "phase-busy" || fixtureProfile === "video-to-dates" || fixtureProfile === "finalize-busy"
+          ? delayed(value)
+          : Promise.resolve(value);
 
       (window as any).__MEMORIA_TEST_API__ = {
         invoke(command: string, args?: Record<string, unknown>) {
@@ -465,7 +495,7 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               state.imageItems = state.imageItems.map((item: ImageReviewItem) =>
                 item.status === "indexed" ? { ...item, status: "image_reviewed", imageFlags: [] } : item
               );
-              return Promise.resolve();
+              return withPhaseDelay(undefined);
             case "complete_video_review_and_run_grouping":
               state.stats.videoPhaseState = "complete";
               return withPhaseDelay(undefined);
