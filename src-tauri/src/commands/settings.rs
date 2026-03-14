@@ -16,8 +16,10 @@ pub struct TaskModelSelection {
 #[serde(rename_all = "camelCase")]
 pub struct AiTaskModels {
     pub date_estimation: TaskModelSelection,
+    pub date_estimation_fallback: Option<TaskModelSelection>,
     pub event_naming: TaskModelSelection,
     pub event_naming_fallback: Option<TaskModelSelection>,
+    pub grouping_pass1: Option<TaskModelSelection>,
 }
 
 #[derive(Serialize)]
@@ -47,7 +49,7 @@ pub struct ToolHealth {
 #[tauri::command]
 pub async fn initialize_app(state: State<'_, AppState>) -> Result<(), String> {
     let conn = state.open_conn().map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "grouping_threshold_days", "3").map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "grouping_threshold_days", "2").map_err(|e| e.to_string())?;
     if db::get_setting(&conn, "ai_model_date_estimation").map_err(|e| e.to_string())?.is_none() {
         db::set_setting(&conn, "ai_model_date_estimation_provider", "anthropic").map_err(|e| e.to_string())?;
         db::set_setting(&conn, "ai_model_date_estimation", "claude-sonnet-4-6").map_err(|e| e.to_string())?;
@@ -87,6 +89,11 @@ pub fn get_app_configuration(state: State<'_, AppState>) -> Result<AppConfigurat
                 model: "claude-sonnet-4-6".to_string(),
             },
         )?,
+        date_estimation_fallback: read_optional_task_model(
+            &conn,
+            "ai_model_date_estimation_fallback_provider",
+            "ai_model_date_estimation_fallback",
+        )?,
         event_naming: read_task_model(
             &conn,
             "ai_model_event_naming_provider",
@@ -100,6 +107,11 @@ pub fn get_app_configuration(state: State<'_, AppState>) -> Result<AppConfigurat
             &conn,
             "ai_model_event_naming_fallback_provider",
             "ai_model_event_naming_fallback",
+        )?,
+        grouping_pass1: read_optional_task_model(
+            &conn,
+            "ai_model_grouping_pass1_provider",
+            "ai_model_grouping_pass1",
         )?,
     };
     Ok(AppConfiguration {
@@ -190,14 +202,19 @@ pub async fn set_ai_task_model(
     }
     let (provider_key, model_key) = match task.as_str() {
         "dateEstimation" => ("ai_model_date_estimation_provider", "ai_model_date_estimation"),
+        "dateEstimationFallback" => (
+            "ai_model_date_estimation_fallback_provider",
+            "ai_model_date_estimation_fallback",
+        ),
         "eventNaming" => ("ai_model_event_naming_provider", "ai_model_event_naming"),
         "eventNamingFallback" => (
             "ai_model_event_naming_fallback_provider",
             "ai_model_event_naming_fallback",
         ),
+        "groupingPass1" => ("ai_model_grouping_pass1_provider", "ai_model_grouping_pass1"),
         _ => {
             return Err(
-                "Unknown AI task. Expected dateEstimation/eventNaming/eventNamingFallback."
+                "Unknown AI task. Expected dateEstimation/dateEstimationFallback/eventNaming/eventNamingFallback/groupingPass1."
                     .to_string(),
             )
         }

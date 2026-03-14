@@ -38,6 +38,16 @@ struct ClusterNamingOutcome {
 
 pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
     runtime_log::info("event_grouper", "Starting event grouping run.");
+    let cluster_gap_days = crate::db::get_setting(conn, "grouping_threshold_days")
+        .ok()
+        .flatten()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|days| *days > 0)
+        .unwrap_or(CLUSTER_GAP_DAYS);
+    runtime_log::info(
+        "event_grouper",
+        format!("Using grouping threshold days = {cluster_gap_days}."),
+    );
     conn.execute("DELETE FROM event_groups", [])?;
     conn.execute("UPDATE media_items SET event_group_id=NULL WHERE status='date_verified'", [])?;
 
@@ -80,7 +90,7 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
     let mut total_groups = 0_i64;
     for (year, mut items) in by_year {
         items.sort_by_key(|x| x.capture_at);
-        let mut clusters = cluster_by_days(items, CLUSTER_GAP_DAYS);
+        let mut clusters = cluster_by_days(items, cluster_gap_days);
         clusters = split_long_span_clusters(clusters, CLUSTER_SPAN_SPLIT_DAYS);
         runtime_log::info(
             "event_grouper",

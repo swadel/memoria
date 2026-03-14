@@ -50,6 +50,11 @@ impl AppState {
                     "ai_model_date_estimation",
                     routing.date_estimation.clone(),
                 );
+                routing.date_estimation_fallback = task_model_from_settings_optional(
+                    &conn,
+                    "ai_model_date_estimation_fallback_provider",
+                    "ai_model_date_estimation_fallback",
+                );
                 routing.event_naming = task_model_from_settings(
                     &conn,
                     "ai_model_event_naming_provider",
@@ -60,6 +65,11 @@ impl AppState {
                     &conn,
                     "ai_model_event_naming_fallback_provider",
                     "ai_model_event_naming_fallback",
+                );
+                routing.grouping_pass1 = task_model_from_settings_optional(
+                    &conn,
+                    "ai_model_grouping_pass1_provider",
+                    "ai_model_grouping_pass1",
                 );
                 (openai, anthropic, routing)
             }

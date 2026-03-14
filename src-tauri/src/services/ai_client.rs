@@ -69,8 +69,10 @@ pub struct TaskModelConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AiRoutingConfig {
     pub date_estimation: TaskModelConfig,
+    pub date_estimation_fallback: Option<TaskModelConfig>,
     pub event_naming: TaskModelConfig,
     pub event_naming_fallback: Option<TaskModelConfig>,
+    pub grouping_pass1: Option<TaskModelConfig>,
 }
 
 impl Default for AiRoutingConfig {
@@ -80,11 +82,13 @@ impl Default for AiRoutingConfig {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet-4-6".to_string(),
             },
+            date_estimation_fallback: None,
             event_naming: TaskModelConfig {
                 provider: "anthropic".to_string(),
                 model: "claude-sonnet-4-6".to_string(),
             },
             event_naming_fallback: None,
+            grouping_pass1: None,
         }
     }
 }
@@ -121,6 +125,11 @@ impl AiClient {
                 .await
             {
                 return Ok(result);
+            }
+            if let Some(fallback_config) = self.routing.date_estimation_fallback.as_ref() {
+                if let Ok(result) = self.estimate_date_via_config(path, fallback_config).await {
+                    return Ok(result);
+                }
             }
         }
 
@@ -197,8 +206,13 @@ impl AiClient {
     }
 
     pub async fn derive_cluster_metadata(&self, request: &EventNamingRequest) -> Result<ClusterMetadata> {
+        let pass1_config = self
+            .routing
+            .grouping_pass1
+            .as_ref()
+            .unwrap_or(&self.routing.event_naming);
         match self
-            .derive_metadata_via_config(request, &self.routing.event_naming)
+            .derive_metadata_via_config(request, pass1_config)
             .await
         {
             Ok(metadata) => Ok(metadata),
