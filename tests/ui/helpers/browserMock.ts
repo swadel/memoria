@@ -6,6 +6,7 @@ type BrowserFixtureProfile =
   | "responsive"
   | "pre-video"
   | "pre-index"
+  | "video-to-dates"
   | "phase-busy"
   | "reset-error"
   | "reset-slow"
@@ -72,8 +73,9 @@ function buildState(profile: BrowserFixtureProfile) {
   const isIngestSlow = profile === "ingest-slow";
   const isGroupingEmpty = profile === "grouping-empty";
   const isPreIndex = profile === "pre-index";
+  const isVideoToDates = profile === "video-to-dates";
   const dateItems: DateEstimate[] =
-    profile === "settings-only" || isIngestSlow || isGroupingEmpty || isPreIndex
+    profile === "settings-only" || isIngestSlow || isGroupingEmpty || isPreIndex || isVideoToDates
       ? []
       : [
           {
@@ -151,8 +153,8 @@ function buildState(profile: BrowserFixtureProfile) {
     indexed: isPreIndex ? 0 : 2,
     imageReview: isComplete || isPreIndex ? 0 : 2,
     imageVerified: isPreIndex ? 0 : 4,
-    dateReview: isComplete || isGroupingEmpty || isPreIndex ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
-    dateNeedsReview: isComplete || isGroupingEmpty || isPreIndex ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
+    dateReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
+    dateNeedsReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
     dateVerified: isComplete ? 8 : isGroupingEmpty || isPreIndex ? 0 : 5,
     grouped: isComplete ? 8 : isGroupingEmpty || isPreIndex ? 0 : 2,
     filed: isComplete ? 8 : isPreIndex ? 0 : 1,
@@ -164,6 +166,10 @@ function buildState(profile: BrowserFixtureProfile) {
     videoUnreviewedFlagged: 2,
     videoPhaseState: (isComplete || isGroupingEmpty ? "complete" : profile === "pre-video" || isIngestSlow || isPreIndex ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
   };
+  if (isVideoToDates) {
+    stats.imagePhaseState = "complete";
+    stats.videoPhaseState = "in_progress";
+  }
 
   const imageItems: ImageReviewItem[] = [
     {
@@ -301,7 +307,8 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
       })();
       if (!state) return;
       const delayed = (value: unknown, ms = 320) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
-      const withPhaseDelay = (value: unknown) => (fixtureProfile === "phase-busy" ? delayed(value) : Promise.resolve(value));
+      const withPhaseDelay = (value: unknown) =>
+        fixtureProfile === "phase-busy" || fixtureProfile === "video-to-dates" ? delayed(value) : Promise.resolve(value);
 
       (window as any).__MEMORIA_TEST_API__ = {
         invoke(command: string, args?: Record<string, unknown>) {
@@ -424,6 +431,31 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "run_date_enforcement":
               if (fixtureProfile === "grouping-empty") {
                 state.stats = { ...state.stats, dateVerified: 8, dateNeedsReview: 0 };
+              } else if (fixtureProfile === "video-to-dates") {
+                state.dateItems = [
+                  {
+                    mediaItemId: 3301,
+                    filename: "date_needed_after_video_1.jpg",
+                    currentDate: null,
+                    aiDate: "2026-05-11",
+                    confidence: 0.86,
+                    reasoning: "Fixture created after date enforcement"
+                  },
+                  {
+                    mediaItemId: 3302,
+                    filename: "date_needed_after_video_2.jpg",
+                    currentDate: null,
+                    aiDate: "2026-05-12",
+                    confidence: 0.81,
+                    reasoning: "Fixture created after date enforcement"
+                  }
+                ];
+                state.stats = {
+                  ...state.stats,
+                  dateNeedsReview: 2,
+                  dateReview: 2,
+                  dateVerified: 6
+                };
               }
               return withPhaseDelay(undefined);
             case "complete_image_review_and_start_video_review":

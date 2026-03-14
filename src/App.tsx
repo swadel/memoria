@@ -903,9 +903,8 @@ export function App() {
             onMessage={setMessage}
             onProceed={async () => {
               await completeVideoReviewAndRunGrouping();
-              await refreshAll();
-              setTab("dates");
-              setMessage("Video review complete. Run Date Enforcement next.");
+              await onRunDateEnforcement();
+              setMessage("Video review complete. Date enforcement complete.");
             }}
           />
         </div>

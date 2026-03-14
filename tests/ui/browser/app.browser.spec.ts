@@ -161,6 +161,20 @@ test.describe("Memoria browser UI", () => {
     await busyPage.close();
   });
 
+  test("video proceed runs date enforcement and opens date approval with queue", async ({ context }) => {
+    const flowPage = await context.newPage();
+    await installBrowserApiMock(flowPage, "video-to-dates");
+    await flowPage.goto("/");
+    await flowPage.getByTestId("tab-videos").click();
+    flowPage.once("dialog", (dialog) => dialog.accept());
+    await flowPage.getByTestId("video-done-proceed").click();
+    await expect(flowPage.getByTestId("global-loading-state")).toBeVisible();
+    await expect(flowPage.getByText("Enforcing dates...")).toBeVisible();
+    await expect(flowPage.getByTestId("date-approval-card")).toBeVisible();
+    await expect(flowPage.locator("[data-testid^='date-item-']")).toHaveCount(2);
+    await flowPage.close();
+  });
+
   test("video review filter mode is mutually exclusive", async ({ page }) => {
     await page.getByTestId("tab-videos").click();
     await expect(page.getByTestId("video-filter-mode-size")).toBeChecked();
