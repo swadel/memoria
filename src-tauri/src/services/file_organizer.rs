@@ -5,7 +5,7 @@ use tokio::fs;
 
 use super::runtime_log;
 
-pub async fn finalize(conn: &Connection, base_output_dir: &str) -> Result<()> {
+pub async fn finalize(conn: &Connection, base_output_dir: &str, app_handle: Option<&tauri::AppHandle>) -> Result<()> {
     runtime_log::info(
         "file_organizer",
         format!("Starting finalize to output root '{}'.", base_output_dir),
@@ -25,10 +25,13 @@ pub async fn finalize(conn: &Connection, base_output_dir: &str) -> Result<()> {
             row.get::<_, String>(4)?,
         ))
     })?;
+    let all_rows: Vec<_> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let total = all_rows.len();
+    runtime_log::emit_pipeline_progress(app_handle, "finalize", "Starting finalization...", 0, total);
 
     let mut filed_count = 0_i64;
-    for row in rows {
-        let (id, filename, current_path, year, folder_name) = row?;
+    for (idx, row) in all_rows.into_iter().enumerate() {
+        let (id, filename, current_path, year, folder_name) = row;
         let target_dir = PathBuf::from(base_output_dir)
             .join("organized")
             .join(year.to_string())
@@ -48,6 +51,13 @@ pub async fn finalize(conn: &Connection, base_output_dir: &str) -> Result<()> {
             params![id, final_path.to_string_lossy().to_string()],
         )?;
         filed_count += 1;
+        runtime_log::emit_pipeline_progress(
+            app_handle,
+            "finalize",
+            &format!("Filed: {filename}"),
+            idx + 1,
+            total,
+        );
         runtime_log::info(
             "file_organizer",
             format!(
@@ -73,6 +83,8 @@ fn windows_long_path<P: AsRef<Path>>(path: P) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::windows_long_path;
+    use crate::db::init_db;
+    use rusqlite::params;
     use std::path::PathBuf;
 
     #[test]
@@ -84,5 +96,62 @@ mod tests {
         } else {
             assert_eq!(out, input);
         }
+    }
+
+    #[tokio::test]
+    async fn finalize_with_none_handle_emits_no_progress_and_succeeds_on_empty_db() {
+        let mut db_path = std::env::temp_dir();
+        db_path.push(format!("memoria-finalize-empty-{}.db", rand::random::<u64>()));
+        let conn = init_db(&db_path).expect("db");
+        let output_root = std::env::temp_dir()
+            .join(format!("memoria-finalize-root-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&output_root).expect("root");
+
+        super::finalize(&conn, output_root.to_str().unwrap_or(""), None)
+            .await
+            .expect("finalize succeeds on empty DB");
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&output_root);
+    }
+
+    #[tokio::test]
+    async fn finalize_copies_grouped_items_to_organized_folder() {
+        let mut db_path = std::env::temp_dir();
+        db_path.push(format!("memoria-finalize-test-{}.db", rand::random::<u64>()));
+        let conn = init_db(&db_path).expect("db");
+        let root = std::env::temp_dir()
+            .join(format!("memoria-finalize-assets-{}", rand::random::<u64>()));
+        let staging = root.join("staging");
+        std::fs::create_dir_all(&staging).expect("staging");
+
+        let src = staging.join("photo.jpg");
+        std::fs::write(&src, b"fake-jpeg").expect("write");
+
+        conn.execute(
+            "INSERT INTO event_groups(id, year, name, folder_name, item_count, user_approved)
+             VALUES(1, 2026, 'Beach Trip', '2026 - Beach Trip', 1, 1)",
+            [],
+        ).expect("group");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, mime_type, event_group_id)
+             VALUES(?1, ?2, ?3, 'grouped', 'image/jpeg', 1)",
+            params!["f1", "photo.jpg", src.to_string_lossy().to_string()],
+        ).expect("media");
+
+        super::finalize(&conn, root.to_str().unwrap_or(""), None)
+            .await
+            .expect("finalize succeeds");
+
+        let organized = root.join("organized").join("2026").join("2026 - Beach Trip").join("photo.jpg");
+        assert!(organized.exists(), "photo should be in organized folder");
+
+        let status: String = conn
+            .query_row("SELECT status FROM media_items WHERE icloud_id='f1'", [], |r| r.get(0))
+            .expect("status");
+        assert_eq!(status, "filed");
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

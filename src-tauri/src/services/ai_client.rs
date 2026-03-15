@@ -93,6 +93,7 @@ pub struct AiRoutingConfig {
     pub event_naming: TaskModelConfig,
     pub event_naming_fallback: Option<TaskModelConfig>,
     pub grouping_pass1: Option<TaskModelConfig>,
+    pub image_review: Option<TaskModelConfig>,
 }
 
 impl Default for AiRoutingConfig {
@@ -109,8 +110,39 @@ impl Default for AiRoutingConfig {
             },
             event_naming_fallback: None,
             grouping_pass1: None,
+            image_review: None,
         }
     }
+}
+
+pub const IMAGE_REVIEW_PROMPT_VERSION: &str = "v1.0";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageQualityAssessment {
+    pub is_blurry: bool,
+    pub is_poorly_exposed: bool,
+    pub quality_score: f64,
+    pub confidence: String,
+    pub reasoning: String,
+    pub model_used: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageContentClassification {
+    pub image_index: usize,
+    pub classification: String,
+    pub confidence: String,
+    pub reasoning: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BurstBestShotResult {
+    pub best_index: usize,
+    pub reasoning: String,
+    pub model_used: Option<String>,
 }
 
 pub const EVENT_NAMING_PROMPT_VERSION: &str = "v3.0";
@@ -147,6 +179,10 @@ impl AiClient {
             routing,
             http: Client::new(),
         }
+    }
+
+    pub fn has_any_key(&self) -> bool {
+        self.openai_api_key.is_some() || self.anthropic_api_key.is_some()
     }
 
     pub async fn estimate_date(&self, filename: &str, image_path: Option<&str>) -> Result<DateEstimate> {
@@ -319,6 +355,219 @@ impl AiClient {
                 self.derive_metadata_via_openai(key, &config.model, request).await
             }
         }
+    }
+
+    fn resolve_image_review_config(&self) -> &TaskModelConfig {
+        self.routing
+            .image_review
+            .as_ref()
+            .or(self.routing.event_naming_fallback.as_ref())
+            .unwrap_or(&self.routing.event_naming)
+    }
+
+    pub async fn assess_image_quality(
+        &self,
+        image_path: &str,
+    ) -> Result<ImageQualityAssessment> {
+        let config = self.resolve_image_review_config();
+        let prompt = "You are evaluating a single photo for quality issues in a photo organization app.\n\
+            Assess this image for:\n\
+            1. Blur/focus: Is the image blurry or out of focus?\n\
+            2. Exposure: Is it severely underexposed (too dark) or overexposed (too bright)?\n\
+            3. Overall quality: Rate from 1-10 (10 = excellent)\n\n\
+            Return ONLY valid JSON:\n\
+            {\"is_blurry\":false,\"is_poorly_exposed\":false,\"quality_score\":8.0,\"confidence\":\"high|medium|low\",\"reasoning\":\"short explanation\"}";
+
+        let result = match config.provider.to_ascii_lowercase().as_str() {
+            "anthropic" => {
+                let Some(key) = self.anthropic_api_key.as_deref() else {
+                    anyhow::bail!("Anthropic API key missing for image review");
+                };
+                let (media_type, data) = image_to_base64_payload(image_path).await?;
+                let body = json!({
+                    "model": config.model,
+                    "max_tokens": 300,
+                    "temperature": 0.2,
+                    "messages": [{"role":"user","content":[
+                        {"type":"text","text":prompt},
+                        {"type":"image","source":{"type":"base64","media_type":media_type,"data":data}}
+                    ]}]
+                });
+                self.anthropic_message_json(key, &body).await?
+            }
+            _ => {
+                let Some(key) = self.openai_api_key.as_deref() else {
+                    anyhow::bail!("OpenAI API key missing for image review");
+                };
+                let data_url = image_to_data_url(image_path).await?;
+                let body = json!({
+                    "model": config.model,
+                    "messages": [{"role":"user","content":[
+                        {"type":"text","text":prompt},
+                        {"type":"image_url","image_url":{"url":data_url}}
+                    ]}],
+                    "temperature": 0.2,
+                    "response_format": {"type":"json_object"}
+                });
+                let v = self.http.post("https://api.openai.com/v1/chat/completions")
+                    .bearer_auth(key).json(&body).send().await?.error_for_status()?
+                    .json::<serde_json::Value>().await?;
+                let content = v["choices"][0]["message"]["content"].as_str()
+                    .context("Missing content")?;
+                serde_json::from_str(content)?
+            }
+        };
+
+        Ok(ImageQualityAssessment {
+            is_blurry: result.get("is_blurry").and_then(|v| v.as_bool()).unwrap_or(false),
+            is_poorly_exposed: result.get("is_poorly_exposed").and_then(|v| v.as_bool()).unwrap_or(false),
+            quality_score: result.get("quality_score").and_then(|v| v.as_f64()).unwrap_or(5.0),
+            confidence: result.get("confidence").and_then(|v| v.as_str()).unwrap_or("medium").to_string(),
+            reasoning: result.get("reasoning").and_then(|v| v.as_str()).unwrap_or("No reasoning.").to_string(),
+            model_used: Some(model_id(config)),
+        })
+    }
+
+    pub async fn classify_image_content(
+        &self,
+        image_paths: &[String],
+    ) -> Result<Vec<ImageContentClassification>> {
+        if image_paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let config = self.resolve_image_review_config();
+        let prompt = format!(
+            "You are classifying {} image(s) for a photo organization app.\n\
+            For each image (indexed 0 to {}), classify as exactly one of: photo, screenshot, meme, graphic, document.\n\
+            Return ONLY a JSON array:\n\
+            [{{\"image_index\":0,\"classification\":\"photo|screenshot|meme|graphic|document\",\"confidence\":\"high|medium|low\",\"reasoning\":\"brief\"}}]",
+            image_paths.len(),
+            image_paths.len() - 1
+        );
+
+        let result = match config.provider.to_ascii_lowercase().as_str() {
+            "anthropic" => {
+                let Some(key) = self.anthropic_api_key.as_deref() else {
+                    anyhow::bail!("Anthropic API key missing for content classification");
+                };
+                let mut content = vec![json!({"type":"text","text":prompt})];
+                for path in image_paths {
+                    if let Ok((media_type, data)) = image_to_base64_payload(path).await {
+                        content.push(json!({"type":"image","source":{"type":"base64","media_type":media_type,"data":data}}));
+                    }
+                }
+                let body = json!({
+                    "model": config.model,
+                    "max_tokens": 500,
+                    "temperature": 0.2,
+                    "messages": [{"role":"user","content":content}]
+                });
+                self.anthropic_message_json(key, &body).await?
+            }
+            _ => {
+                let Some(key) = self.openai_api_key.as_deref() else {
+                    anyhow::bail!("OpenAI API key missing for content classification");
+                };
+                let mut content = vec![json!({"type":"text","text":prompt})];
+                for path in image_paths {
+                    if let Ok(data_url) = image_to_data_url(path).await {
+                        content.push(json!({"type":"image_url","image_url":{"url":data_url}}));
+                    }
+                }
+                let body = json!({
+                    "model": config.model,
+                    "messages": [{"role":"user","content":content}],
+                    "temperature": 0.2,
+                    "response_format": {"type":"json_object"}
+                });
+                let v = self.http.post("https://api.openai.com/v1/chat/completions")
+                    .bearer_auth(key).json(&body).send().await?.error_for_status()?
+                    .json::<serde_json::Value>().await?;
+                let content = v["choices"][0]["message"]["content"].as_str()
+                    .context("Missing content")?;
+                serde_json::from_str(content)?
+            }
+        };
+
+        let arr = result.as_array().cloned().unwrap_or_default();
+        Ok(arr.iter().filter_map(|item| {
+            Some(ImageContentClassification {
+                image_index: item.get("image_index")?.as_u64()? as usize,
+                classification: item.get("classification")?.as_str()?.to_string(),
+                confidence: item.get("confidence").and_then(|v| v.as_str()).unwrap_or("medium").to_string(),
+                reasoning: item.get("reasoning").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            })
+        }).collect())
+    }
+
+    pub async fn select_burst_best_shot(
+        &self,
+        image_paths: &[String],
+    ) -> Result<BurstBestShotResult> {
+        if image_paths.is_empty() {
+            return Ok(BurstBestShotResult { best_index: 0, reasoning: "Empty group".to_string(), model_used: None });
+        }
+        let config = self.resolve_image_review_config();
+        let prompt = format!(
+            "These {} images are from a rapid burst sequence of the same scene.\n\
+            Which single image is the BEST shot? Consider:\n\
+            - Sharpness and focus\n\
+            - Composition and framing\n\
+            - Facial expressions (eyes open, smiles)\n\
+            - Exposure quality\n\n\
+            Return ONLY valid JSON: {{\"best_index\":0,\"reasoning\":\"brief explanation\"}}",
+            image_paths.len()
+        );
+
+        let result = match config.provider.to_ascii_lowercase().as_str() {
+            "anthropic" => {
+                let Some(key) = self.anthropic_api_key.as_deref() else {
+                    anyhow::bail!("Anthropic API key missing for burst best-shot");
+                };
+                let mut content = vec![json!({"type":"text","text":prompt})];
+                for path in image_paths {
+                    if let Ok((media_type, data)) = image_to_base64_payload(path).await {
+                        content.push(json!({"type":"image","source":{"type":"base64","media_type":media_type,"data":data}}));
+                    }
+                }
+                let body = json!({
+                    "model": config.model,
+                    "max_tokens": 200,
+                    "temperature": 0.2,
+                    "messages": [{"role":"user","content":content}]
+                });
+                self.anthropic_message_json(key, &body).await?
+            }
+            _ => {
+                let Some(key) = self.openai_api_key.as_deref() else {
+                    anyhow::bail!("OpenAI API key missing for burst best-shot");
+                };
+                let mut content = vec![json!({"type":"text","text":prompt})];
+                for path in image_paths {
+                    if let Ok(data_url) = image_to_data_url(path).await {
+                        content.push(json!({"type":"image_url","image_url":{"url":data_url}}));
+                    }
+                }
+                let body = json!({
+                    "model": config.model,
+                    "messages": [{"role":"user","content":content}],
+                    "temperature": 0.2,
+                    "response_format": {"type":"json_object"}
+                });
+                let v = self.http.post("https://api.openai.com/v1/chat/completions")
+                    .bearer_auth(key).json(&body).send().await?.error_for_status()?
+                    .json::<serde_json::Value>().await?;
+                let content = v["choices"][0]["message"]["content"].as_str()
+                    .context("Missing content")?;
+                serde_json::from_str(content)?
+            }
+        };
+
+        Ok(BurstBestShotResult {
+            best_index: result.get("best_index").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            reasoning: result.get("reasoning").and_then(|v| v.as_str()).unwrap_or("No reasoning.").to_string(),
+            model_used: Some(model_id(config)),
+        })
     }
 
     async fn estimate_date_via_openai(

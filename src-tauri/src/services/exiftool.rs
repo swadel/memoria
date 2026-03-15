@@ -18,6 +18,8 @@ pub struct MetadataInfo {
     pub duration_secs: Option<f64>,
     pub video_codec: Option<String>,
     pub content_identifier: Option<String>,
+    pub camera_make: Option<String>,
+    pub camera_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +61,8 @@ pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
         .arg("-CodecID")
         .arg("-ContentIdentifier")
         .arg("-ComAppleQuickTimeContentIdentifier")
+        .arg("-Make")
+        .arg("-Model")
         .arg(path)
         .output()
         .await;
@@ -134,6 +138,14 @@ fn parse_metadata_value(first: &serde_json::Value) -> MetadataInfo {
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string)
             }),
+        camera_make: first
+            .get("Make")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        camera_model: first
+            .get("Model")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
     }
 }
 
@@ -182,6 +194,30 @@ pub async fn read_gps_coordinates(path: &Path) -> Result<Option<(f64, f64)>> {
         (Some(a), Some(b)) => Some((a, b)),
         _ => None,
     })
+}
+
+/// Synchronous fast-path that extracts only camera Make/Model.
+/// Uses std::process::Command so it can be called from rayon worker threads.
+pub fn read_camera_metadata_sync(path: &Path) -> Option<(Option<String>, Option<String>)> {
+    let exiftool_bin = exiftool_binary()?;
+    let output = std::process::Command::new(exiftool_bin)
+        .arg("-j")
+        .arg("-n")
+        .arg("-Make")
+        .arg("-Model")
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let first = parsed.as_array().and_then(|arr| arr.first())?;
+    let make = first.get("Make").and_then(|v| v.as_str()).map(ToString::to_string);
+    let model = first.get("Model").and_then(|v| v.as_str()).map(ToString::to_string);
+    Some((make, model))
 }
 
 pub async fn create_thumbnail_ffmpeg(input: &Path, output_jpg: &Path) -> Result<()> {

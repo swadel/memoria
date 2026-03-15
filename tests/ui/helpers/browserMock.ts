@@ -65,8 +65,14 @@ type ImageReviewItem = {
   mimeType: string;
   fileSizeBytes: number;
   sharpnessScore: number | null;
+  blurScore: number | null;
+  perceptualHash: string | null;
   burstGroupId: string | null;
   isBurstPrimary: boolean;
+  duplicateGroupId: string | null;
+  exposureMean: number | null;
+  aiQualityScore: number | null;
+  aiContentClass: string | null;
   imageFlags: string[];
   status: string;
 };
@@ -79,7 +85,7 @@ function buildState(profile: BrowserFixtureProfile) {
   const isFinalizeBusy = profile === "finalize-busy";
   const isDashboardVideoOnly = profile === "dashboard-video-only";
   const dateItems: DateEstimate[] =
-    profile === "settings-only" || isIngestSlow || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy
+    profile === "settings-only" || isIngestSlow || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy || isDashboardVideoOnly
       ? []
       : [
           {
@@ -177,8 +183,8 @@ function buildState(profile: BrowserFixtureProfile) {
     indexed: isPreIndex ? 0 : 2,
     imageReview: isComplete || isPreIndex ? 0 : 2,
     imageVerified: isPreIndex ? 0 : 4,
-    dateReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
-    dateNeedsReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
+    dateReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy || isDashboardVideoOnly ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
+    dateNeedsReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy || isDashboardVideoOnly ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
     dateVerified: isComplete ? 8 : isGroupingEmpty || isPreIndex ? 0 : 5,
     grouped: isComplete ? 8 : isGroupingEmpty || isPreIndex ? 0 : 2,
     filed: isComplete ? 8 : isPreIndex ? 0 : 1,
@@ -188,7 +194,7 @@ function buildState(profile: BrowserFixtureProfile) {
     videoFlagged: 2,
     videoExcluded: 1,
     videoUnreviewedFlagged: 2,
-    videoPhaseState: (isComplete || isGroupingEmpty || isFinalizeBusy ? "complete" : profile === "pre-video" || isIngestSlow || isPreIndex ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
+    videoPhaseState: (isComplete || isGroupingEmpty || isFinalizeBusy || isDashboardVideoOnly ? "complete" : profile === "pre-video" || isIngestSlow || isPreIndex ? "pending" : "in_progress") as "pending" | "in_progress" | "complete"
   };
   if (isVideoToDates) {
     stats.imagePhaseState = "complete";
@@ -208,8 +214,14 @@ function buildState(profile: BrowserFixtureProfile) {
       mimeType: "image/jpeg",
       fileSizeBytes: 420_000,
       sharpnessScore: 82.5,
+      blurScore: 0.35,
+      perceptualHash: "a1b2c3d4e5f60001",
       burstGroupId: "burst-a",
       isBurstPrimary: false,
+      duplicateGroupId: null,
+      exposureMean: 0.48,
+      aiQualityScore: null,
+      aiContentClass: null,
       imageFlags: ["small_file", "burst_shot"],
       status: "indexed"
     },
@@ -221,8 +233,14 @@ function buildState(profile: BrowserFixtureProfile) {
       mimeType: "image/jpeg",
       fileSizeBytes: 530_000,
       sharpnessScore: 132.8,
+      blurScore: 0.12,
+      perceptualHash: "a1b2c3d4e5f60002",
       burstGroupId: "burst-a",
       isBurstPrimary: true,
+      duplicateGroupId: null,
+      exposureMean: 0.52,
+      aiQualityScore: null,
+      aiContentClass: null,
       imageFlags: [],
       status: "indexed"
     },
@@ -234,8 +252,14 @@ function buildState(profile: BrowserFixtureProfile) {
       mimeType: "image/jpeg",
       fileSizeBytes: 1_500_000,
       sharpnessScore: 42.2,
+      blurScore: 0.78,
+      perceptualHash: "ff00ff00ff00ff00",
       burstGroupId: null,
       isBurstPrimary: false,
+      duplicateGroupId: null,
+      exposureMean: 0.45,
+      aiQualityScore: null,
+      aiContentClass: null,
       imageFlags: ["blurry"],
       status: "indexed"
     },
@@ -247,8 +271,14 @@ function buildState(profile: BrowserFixtureProfile) {
       mimeType: "image/jpeg",
       fileSizeBytes: 460_000,
       sharpnessScore: 65.0,
+      blurScore: 0.22,
+      perceptualHash: "0011223344556677",
       burstGroupId: null,
       isBurstPrimary: false,
+      duplicateGroupId: null,
+      exposureMean: 0.50,
+      aiQualityScore: null,
+      aiContentClass: null,
       imageFlags: ["small_file"],
       status: "excluded"
     }
@@ -305,7 +335,8 @@ function buildState(profile: BrowserFixtureProfile) {
         dateEstimationFallback: null,
         eventNaming: { provider: "anthropic", model: "claude-sonnet-4-6" },
         eventNamingFallback: null,
-        groupingPass1: null
+        groupingPass1: null,
+        imageReview: null
       },
       homeLocation: null as { addressRaw: string; label: string | null; latitude: number; longitude: number; radiusMiles: number } | null
     },
@@ -315,6 +346,17 @@ function buildState(profile: BrowserFixtureProfile) {
     eventGroupItemsByGroupId,
     imageItems,
     videoItems,
+    imageReviewSettings: {
+      blurThreshold: 0.6,
+      blurBorderlinePct: 0.15,
+      exposureDarkPct: 0.05,
+      exposureBrightPct: 0.95,
+      burstTimeWindowSecs: 3,
+      burstHashDistance: 10,
+      duplicateHashDistance: 5,
+      smallFileMinBytes: 512000,
+      screenshotHeuristicThreshold: 0.6
+    },
     nextGroupId: 402,
     resetBehavior: profile === "reset-error" ? "error" : profile === "reset-slow" ? "slow" : "normal",
     ingestBehavior: isIngestSlow ? "slow" : "normal"
@@ -443,6 +485,7 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                 if (task === "eventNaming") state.config.aiTaskModels.eventNaming = next;
                 if (task === "eventNamingFallback") state.config.aiTaskModels.eventNamingFallback = next;
                 if (task === "groupingPass1") state.config.aiTaskModels.groupingPass1 = next;
+                if (task === "imageReview") state.config.aiTaskModels.imageReview = next;
               }
               if (command === "clear_ai_task_model") {
                 const task = String(args?.task ?? "");
@@ -463,6 +506,12 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                     return Promise.reject(new Error("groupingPass1 is not configured"));
                   }
                   state.config.aiTaskModels.groupingPass1 = null;
+                }
+                if (task === "imageReview") {
+                  if (!state.config.aiTaskModels.imageReview) {
+                    return Promise.reject(new Error("imageReview is not configured"));
+                  }
+                  state.config.aiTaskModels.imageReview = null;
                 }
               }
               if (fixtureProfile === "grouping-empty" && state.eventGroups.length === 0) {
@@ -809,6 +858,15 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               }
               group.itemCount = destinationItems.filter((item: EventGroupItem) => item.status !== "excluded").length;
               return Promise.resolve(group);
+            }
+            case "get_image_review_settings":
+              return Promise.resolve(state.imageReviewSettings);
+            case "set_image_review_settings": {
+              const settings = args?.settings as Record<string, unknown> | undefined;
+              if (settings) {
+                state.imageReviewSettings = { ...state.imageReviewSettings, ...settings };
+              }
+              return Promise.resolve();
             }
             default:
               return Promise.reject(new Error(`Unknown mocked command: ${command}`));

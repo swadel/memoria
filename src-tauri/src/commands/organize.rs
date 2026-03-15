@@ -16,7 +16,7 @@ use crate::{
 const DUPLICATE_GROUP_NAME_ERROR: &str = "A group with this name already exists";
 
 #[tauri::command]
-pub fn run_event_grouping(state: State<'_, AppState>) -> Result<(), String> {
+pub fn run_event_grouping(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     tauri::async_runtime::block_on(async {
         runtime_log::info("commands.organize", "Invoked run_event_grouping.");
         let conn = state.open_conn().map_err(|e| e.to_string())?;
@@ -34,7 +34,7 @@ pub fn run_event_grouping(state: State<'_, AppState>) -> Result<(), String> {
             return Err("Video Review must be completed before Event Grouping.".to_string());
         }
         let ai = state.ai_client().await;
-        event_grouper::run(&conn, &ai)
+        event_grouper::run(&conn, &ai, Some(&app_handle))
             .await
             .map_err(|e| e.to_string())?;
         runtime_log::info("commands.organize", "run_event_grouping completed successfully.");
@@ -152,7 +152,7 @@ pub fn create_event_group_and_move(
 }
 
 #[tauri::command]
-pub fn finalize_organization(state: State<'_, AppState>) -> Result<(), String> {
+pub fn finalize_organization(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     tauri::async_runtime::block_on(async {
         runtime_log::info("commands.organize", "Invoked finalize_organization.");
         let conn = state.open_conn().map_err(|e| e.to_string())?;
@@ -162,7 +162,7 @@ pub fn finalize_organization(state: State<'_, AppState>) -> Result<(), String> {
             .ok()
             .and_then(|g| g.clone())
             .unwrap_or_else(|| "C:\\Memoria".to_string());
-        file_organizer::finalize(&conn, &output)
+        file_organizer::finalize(&conn, &output, Some(&app_handle))
             .await
             .map_err(|e| e.to_string())?;
         runtime_log::info("commands.organize", "finalize_organization completed successfully.");

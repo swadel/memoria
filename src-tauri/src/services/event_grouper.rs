@@ -219,7 +219,7 @@ fn evenly_distributed_indices(total: usize, target: usize) -> Vec<usize> {
     (0..n).map(|i| (i as f64 * step).round() as usize).collect()
 }
 
-pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
+pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::AppHandle>) -> Result<()> {
     runtime_log::info("event_grouper", "Starting event grouping run.");
     let cluster_gap_days = crate::db::get_setting(conn, "grouping_threshold_days")
         .ok()
@@ -274,8 +274,9 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
     let mut geocoder = ReverseGeocoder::new();
     geocoder.load_persistent_cache(conn);
     let home_config = read_home_location_config(conn);
+    let total_years = by_year.len();
     let mut total_groups = 0_i64;
-    for (year, mut items) in by_year {
+    for (year_idx, (year, mut items)) in by_year.into_iter().enumerate() {
         items.sort_by_key(|x| x.capture_at);
         let mut clusters = cluster_by_days(items, cluster_gap_days);
         clusters = split_long_span_clusters(clusters, CLUSTER_SPAN_SPLIT_DAYS);
@@ -283,9 +284,25 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
             "event_grouper",
             format!("Year {year}: building {} clusters.", clusters.len()),
         );
+        runtime_log::emit_pipeline_progress(
+            app_handle,
+            "event_grouping",
+            &format!("Grouping year {year}..."),
+            year_idx + 1,
+            total_years,
+        );
 
         let mut queue = clusters;
+        let mut cluster_idx = 0_usize;
         while let Some(cluster) = queue.pop() {
+            cluster_idx += 1;
+            runtime_log::emit_pipeline_progress(
+                app_handle,
+                "event_grouping",
+                &format!("Naming group {cluster_idx} for {year}..."),
+                cluster_idx,
+                cluster_idx,
+            );
             let outcome = name_cluster(year, &cluster, ai, &http, &mut geocoder, conn, home_config.as_ref()).await?;
             let naming = outcome.suggestion;
             let normalized_for_split = naming
@@ -1030,7 +1047,7 @@ mod tests {
         )
         .expect("excluded");
         let ai = crate::services::ai_client::AiClient::new(None, None, crate::services::ai_client::AiRoutingConfig::default());
-        run(&conn, &ai).await.expect("run");
+        run(&conn, &ai, None).await.expect("run");
         let grouped_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM media_items WHERE status='grouped'", [], |r| r.get(0))
             .expect("grouped count");
@@ -1067,7 +1084,7 @@ mod tests {
 
         let ai =
             crate::services::ai_client::AiClient::new(None, None, crate::services::ai_client::AiRoutingConfig::default());
-        run(&conn, &ai).await.expect("grouping run should succeed");
+        run(&conn, &ai, None).await.expect("grouping run should succeed");
 
         let stale_link_count: i64 = conn
             .query_row(

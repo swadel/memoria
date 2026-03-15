@@ -1,5 +1,6 @@
 use chrono::Utc;
 use std::sync::OnceLock;
+use tauri::Emitter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum LogLevel {
@@ -45,5 +46,31 @@ pub fn warn(scope: &str, message: impl AsRef<str>) {
         Utc::now().to_rfc3339(),
         scope,
         message.as_ref()
+    );
+}
+
+/// Emit a `pipeline-progress` event to the Tauri frontend.
+/// Payload: `{ phase, message, current, total }`.
+pub fn emit_pipeline_progress(
+    app_handle: Option<&tauri::AppHandle>,
+    phase: &str,
+    message: &str,
+    current: usize,
+    total: usize,
+) {
+    if let Some(handle) = app_handle {
+        let _ = handle.emit(
+            "pipeline-progress",
+            serde_json::json!({
+                "phase": phase,
+                "message": message,
+                "current": current,
+                "total": total
+            }),
+        );
+    }
+    info(
+        phase,
+        format!("[{current}/{total}] {message}"),
     );
 }

@@ -1,9 +1,10 @@
 import { type CSSProperties, type ComponentProps, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { listen } from "@tauri-apps/api/event";
 import { AnimatePresence, motion } from "framer-motion";
 import { AppShell } from "./components/AppShell";
 import { ProgressHero } from "./components/Dashboard/ProgressHero";
-import { LoadingState } from "./components/UI/LoadingState";
+import { LoadingState, type PipelineProgress } from "./components/UI/LoadingState";
 import { SuccessToast } from "./components/UI/SuccessToast";
 import { PageHeader } from "./components/PageHeader";
 import { ReviewToolbar } from "./components/ReviewToolbar";
@@ -50,6 +51,9 @@ import {
   setWorkingDirectory,
   startDownloadSession,
   resetSession,
+  getImageReviewSettings,
+  setImageReviewSettings,
+  getVideoSrcUrl,
   type OptionalAiTaskName,
   type ToolHealth
 } from "./lib/api";
@@ -65,7 +69,7 @@ import {
   calculateEmptySlotsInRow,
   calculateRowCount
 } from "./lib/responsiveGrid";
-import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, ImageReviewItem, VideoReviewItem } from "./types";
+import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, ImageReviewItem, ImageReviewSettings, VideoReviewItem } from "./types";
 
 type Tab = "dashboard" | "images" | "videos" | "dates" | "events" | "settings";
 type PipelineStage = "index" | "image" | "video" | "date" | "group" | "finalize";
@@ -77,6 +81,7 @@ type AiModelsState = {
   eventNaming: AiModelSelection;
   eventNamingFallback: AiModelSelection | null;
   groupingPass1: AiModelSelection | null;
+  imageReview: AiModelSelection | null;
 };
 
 const DEFAULT_STATS: DashboardStats = {
@@ -181,7 +186,9 @@ export function App() {
   const [homeLabelInput, setHomeLabelInput] = useState("");
   const [homeRadiusInput, setHomeRadiusInput] = useState("25");
   const [homeLocationStatus, setHomeLocationStatus] = useState("");
+  const [reviewSettings, setReviewSettings] = useState<ImageReviewSettings | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [pipelineProgress, setPipelineProgress] = useState<PipelineProgress | null>(null);
   const [showFinalizeToast, setShowFinalizeToast] = useState(false);
   const [completionToastTotal, setCompletionToastTotal] = useState<number | null>(null);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
@@ -265,6 +272,12 @@ export function App() {
         } catch {
           setToolHealth(null);
         }
+        try {
+          const rs = await getImageReviewSettings();
+          setReviewSettings(rs);
+        } catch {
+          // keep null
+        }
         await refreshAll();
       })
       .catch((err) => setMessage(`Initialization failed: ${String(err)}`));
@@ -279,8 +292,32 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (window.__MEMORIA_TEST_API__) return;
+    let unlisten: (() => void) | undefined;
+    listen<{ phase: string; message: string; current: number; total: number }>(
+      "pipeline-progress",
+      (event) => {
+        setPipelineProgress({
+          current: event.payload.current,
+          total: event.payload.total,
+          detail: event.payload.message
+        });
+      }
+    )
+      .then((fn) => { unlisten = fn; })
+      .catch(() => undefined);
+    return () => { unlisten?.(); };
+  }, []);
+
+  useEffect(() => {
     refreshAll().catch(() => undefined);
   }, [showExcludedVideos, showExcludedImages]);
+
+  useEffect(() => {
+    if (busyAction === null) {
+      setPipelineProgress(null);
+    }
+  }, [busyAction]);
 
   useEffect(() => {
     if (stats.total > 0 && stats.filed >= stats.total && completionToastTotal !== stats.total) {
@@ -647,6 +684,10 @@ export function App() {
       setPreviewSrc("");
       return;
     }
+    if (previewItem.mimeType.startsWith("video/")) {
+      setPreviewSrc(getVideoSrcUrl(previewItem.currentPath));
+      return;
+    }
     getEventGroupMediaPreview(previewItem.id)
       .then((src) => setPreviewSrc(src ?? ""))
       .catch((err) => setMessage(`Preview failed: ${String(err)}`));
@@ -766,7 +807,7 @@ export function App() {
     >
       {loadingStateCopy ? (
         <div className="loadingStateOverlay mica-surface bg-white/40 backdrop-blur-md" data-testid="global-loading-state">
-          <LoadingState message={loadingStateCopy.message} hint={loadingStateCopy.hint} />
+          <LoadingState message={loadingStateCopy.message} hint={loadingStateCopy.hint} progress={pipelineProgress} />
         </div>
       ) : null}
       <AnimatePresence mode="wait" initial={false}>
@@ -1407,22 +1448,22 @@ export function App() {
             <div className="settingsFormGrid">
               <h5 className="settingsSubgroupTitle">Date Estimation</h5>
               <ModelSelector
-                label="Date Estimation — Primary Model"
+                label="Primary Model — Analyzes photos to estimate when they were taken"
                 testPrefix="date-estimation"
                 value={aiModels.dateEstimation}
                 onChange={(next) => setAiModels((prev) => ({ ...prev, dateEstimation: next }))}
               />
               <ModelSelector
-                label="Date Estimation — Fallback Model"
+                label="Fallback Model — Used when the primary model fails or returns low confidence"
                 testPrefix="date-estimation-fallback"
                 value={aiModels.dateEstimationFallback}
                 optional
                 onChange={(next) => setAiModels((prev) => ({ ...prev, dateEstimationFallback: next }))}
                 onClear={() => setAiModels((prev) => ({ ...prev, dateEstimationFallback: null }))}
               />
-              <h5 className="settingsSubgroupTitle">Event Grouping</h5>
+              <h5 className="settingsSubgroupTitle">Event Grouping and Naming</h5>
               <ModelSelector
-                label="Grouping Pass 1 — Cluster Analysis Model"
+                label="Cluster Analysis Model — Extracts scene, activity, and location clues from sample photos"
                 testPrefix="grouping-pass1"
                 value={aiModels.groupingPass1}
                 optional
@@ -1430,19 +1471,31 @@ export function App() {
                 onClear={() => setAiModels((prev) => ({ ...prev, groupingPass1: null }))}
               />
               <ModelSelector
-                label="Grouping Pass 2 — Event Naming Model"
+                label="Event Naming Model — Generates descriptive folder names from cluster analysis and photo context"
                 testPrefix="event-naming"
                 value={aiModels.eventNaming}
                 onChange={(next) => setAiModels((prev) => ({ ...prev, eventNaming: next }))}
               />
               <ModelSelector
-                label="Event Naming — Fallback Model"
+                label="Naming Fallback Model — Used when the naming model fails or returns a generic name"
                 testPrefix="event-naming-fallback"
                 value={aiModels.eventNamingFallback}
                 optional
                 onChange={(next) => setAiModels((prev) => ({ ...prev, eventNamingFallback: next }))}
                 onClear={() => setAiModels((prev) => ({ ...prev, eventNamingFallback: null }))}
               />
+              <h5 className="settingsSubgroupTitle">Image Review Quality</h5>
+              <ModelSelector
+                label="Quality Assessment Model — Evaluates borderline blur, classifies screenshots and memes"
+                testPrefix="image-review"
+                value={aiModels.imageReview}
+                optional
+                onChange={(next) => setAiModels((prev) => ({ ...prev, imageReview: next }))}
+                onClear={() => setAiModels((prev) => ({ ...prev, imageReview: null }))}
+              />
+              <p className="settingsHelpText" data-testid="image-review-fallback-text">
+                Falls back to Naming Fallback Model, then Event Naming Model when not configured.
+              </p>
             </div>
             <div className="settingsActionRow">
               <button
@@ -1473,6 +1526,11 @@ export function App() {
                         task: "eventNamingFallback",
                         current: aiModels.eventNamingFallback,
                         previous: savedAiModelsRef.current.eventNamingFallback
+                      },
+                      {
+                        task: "imageReview",
+                        current: aiModels.imageReview,
+                        previous: savedAiModelsRef.current.imageReview
                       }
                     ];
                     for (const slot of optionalSlots) {
@@ -1499,6 +1557,177 @@ export function App() {
               </button>
             </div>
           </section>
+
+          {reviewSettings && (
+          <section className="settingsSectionCard" data-testid="settings-section-image-review-thresholds">
+            <h4 className="settingsSectionTitle">Image Review Thresholds</h4>
+            <div className="settingsFormGrid">
+              <label className="settingsLabel" htmlFor="threshold-blur">
+                Blur Threshold (Laplacian variance below this = blurry)
+              </label>
+              <input
+                id="threshold-blur"
+                data-testid="threshold-blur"
+                type="number"
+                step="1"
+                min="0"
+                className="settingsInput"
+                value={reviewSettings.blurThreshold}
+                onChange={(e) => setReviewSettings({ ...reviewSettings, blurThreshold: Number(e.target.value) })}
+              />
+              <label className="settingsLabel" htmlFor="threshold-blur-borderline">
+                Blur Borderline % (± range sent to AI for confirmation)
+              </label>
+              <input
+                id="threshold-blur-borderline"
+                data-testid="threshold-blur-borderline"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                className="settingsInput"
+                value={reviewSettings.blurBorderlinePct}
+                onChange={(e) => setReviewSettings({ ...reviewSettings, blurBorderlinePct: Number(e.target.value) })}
+              />
+              <label className="settingsLabel" htmlFor="threshold-exposure-dark">
+                Exposure Dark Pixel % (above this = underexposed)
+              </label>
+              <input
+                id="threshold-exposure-dark"
+                data-testid="threshold-exposure-dark"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                className="settingsInput"
+                value={reviewSettings.exposureDarkPct}
+                onChange={(e) => setReviewSettings({ ...reviewSettings, exposureDarkPct: Number(e.target.value) })}
+              />
+              <label className="settingsLabel" htmlFor="threshold-exposure-bright">
+                Exposure Bright Pixel % (above this = overexposed)
+              </label>
+              <input
+                id="threshold-exposure-bright"
+                data-testid="threshold-exposure-bright"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                className="settingsInput"
+                value={reviewSettings.exposureBrightPct}
+                onChange={(e) => setReviewSettings({ ...reviewSettings, exposureBrightPct: Number(e.target.value) })}
+              />
+              <label className="settingsLabel" htmlFor="threshold-burst-window">
+                Burst Time Window (seconds between consecutive shots)
+              </label>
+              <input
+                id="threshold-burst-window"
+                data-testid="threshold-burst-window"
+                type="number"
+                step="1"
+                min="1"
+                className="settingsInput"
+                value={reviewSettings.burstTimeWindowSecs}
+                onChange={(e) => setReviewSettings({ ...reviewSettings, burstTimeWindowSecs: Number(e.target.value) })}
+              />
+              <label className="settingsLabel" htmlFor="threshold-burst-hash">
+                Burst Hash Distance (max hamming distance for visual similarity)
+              </label>
+              <input
+                id="threshold-burst-hash"
+                data-testid="threshold-burst-hash"
+                type="number"
+                step="1"
+                min="0"
+                max="64"
+                className="settingsInput"
+                value={reviewSettings.burstHashDistance}
+                onChange={(e) => setReviewSettings({ ...reviewSettings, burstHashDistance: Number(e.target.value) })}
+              />
+              <label className="settingsLabel" htmlFor="threshold-duplicate-hash">
+                Duplicate Hash Distance (max hamming distance for duplicates)
+              </label>
+              <input
+                id="threshold-duplicate-hash"
+                data-testid="threshold-duplicate-hash"
+                type="number"
+                step="1"
+                min="0"
+                max="64"
+                className="settingsInput"
+                value={reviewSettings.duplicateHashDistance}
+                onChange={(e) => setReviewSettings({ ...reviewSettings, duplicateHashDistance: Number(e.target.value) })}
+              />
+              <label className="settingsLabel" htmlFor="threshold-small-file">
+                Minimum File Size (bytes)
+              </label>
+              <input
+                id="threshold-small-file"
+                data-testid="threshold-small-file"
+                type="number"
+                step="1024"
+                min="0"
+                className="settingsInput"
+                value={reviewSettings.smallFileMinBytes}
+                onChange={(e) => setReviewSettings({ ...reviewSettings, smallFileMinBytes: Number(e.target.value) })}
+              />
+              <label className="settingsLabel" htmlFor="threshold-screenshot">
+                Screenshot Heuristic Threshold (score above this triggers AI classification)
+              </label>
+              <input
+                id="threshold-screenshot"
+                data-testid="threshold-screenshot"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                className="settingsInput"
+                value={reviewSettings.screenshotHeuristicThreshold}
+                onChange={(e) => setReviewSettings({ ...reviewSettings, screenshotHeuristicThreshold: Number(e.target.value) })}
+              />
+            </div>
+            <div className="settingsActionRow">
+              <button
+                data-testid="settings-save-review-thresholds"
+                className="secondaryBtn"
+                disabled={busyAction !== null}
+                onClick={async () => {
+                  setBusyAction("save-review-thresholds");
+                  try {
+                    await setImageReviewSettings(reviewSettings);
+                    setMessage("Image review thresholds saved.");
+                  } catch (err) {
+                    setMessage(`Saving thresholds failed: ${String(err)}`);
+                  } finally {
+                    setBusyAction(null);
+                  }
+                }}
+              >
+                {busyAction === "save-review-thresholds" ? "Saving..." : "Save Thresholds"}
+              </button>
+              <button
+                data-testid="settings-reset-review-thresholds"
+                className="secondaryBtn"
+                disabled={busyAction !== null}
+                onClick={() => {
+                  setReviewSettings({
+                    blurThreshold: 50.0,
+                    blurBorderlinePct: 0.2,
+                    exposureDarkPct: 0.6,
+                    exposureBrightPct: 0.6,
+                    burstTimeWindowSecs: 3,
+                    burstHashDistance: 10,
+                    duplicateHashDistance: 5,
+                    smallFileMinBytes: 512000,
+                    screenshotHeuristicThreshold: 0.6,
+                  });
+                }}
+              >
+                Reset to Defaults
+              </button>
+            </div>
+          </section>
+          )}
         </div>
         </motion.div>
       )}
@@ -2276,23 +2505,48 @@ function EventThumbCard({
         opacity: muted ? 0.65 : 1
       }}
     >
-      <button
-        className="eventThumbPreviewButton"
-        data-testid={`event-media-preview-${item.id}`}
-        onClick={onOpenPreview}
-      >
-        <img
-          className="eventThumbImage"
-          src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)}
-          alt={item.filename}
-          style={{
-            width: "100%",
-            height: THUMBNAIL_SIZE,
-            objectFit: "cover",
-            flexShrink: 0
-          }}
-        />
-      </button>
+      <div className="eventThumbImageWrap">
+        <button
+          className="eventThumbPreviewButton"
+          data-testid={`event-media-preview-${item.id}`}
+          onClick={onOpenPreview}
+        >
+          <img
+            className="eventThumbImage"
+            src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)}
+            alt={item.filename}
+            style={{
+              width: "100%",
+              height: THUMBNAIL_SIZE,
+              objectFit: "cover",
+              flexShrink: 0
+            }}
+          />
+          {item.mimeType.startsWith("video/") && (
+            <span data-testid={`event-media-play-glyph-${item.id}`} className="eventThumbPlayGlyph">▶</span>
+          )}
+        </button>
+        {!showExcluded && (
+          <div className="eventThumbOverlay">
+            <button
+              className="mediaTileIconButton"
+              data-testid={`event-media-select-overlay-${item.id}`}
+              onClick={(event) => onToggle(event.shiftKey)}
+              aria-label={selected ? "Deselect" : "Select"}
+            >
+              <IconCheckCircle filled={selected} />
+            </button>
+            <button
+              className="mediaTileIconButton mediaTileIconButtonDanger"
+              data-testid={`event-media-remove-overlay-${item.id}`}
+              onClick={() => setConfirmExclude(true)}
+              aria-label="Remove"
+            >
+              <IconXCircle />
+            </button>
+          </div>
+        )}
+      </div>
       <div className="eventThumbMeta" style={{ padding: "6px 8px", flexShrink: 0, minHeight: CARD_LABEL_HEIGHT }}>
         <strong
           className="truncateOneLine"
@@ -2324,7 +2578,7 @@ function EventThumbCard({
           </button>
         ) : confirmExclude ? (
           <div data-testid={`event-media-exclude-confirm-${item.id}`}>
-            <div className="danger" style={{ fontSize: 11, marginBottom: 6 }}>Move this item to recycle?</div>
+            <div className="danger" style={{ fontSize: 11, marginBottom: 6 }}>Remove and move to recycle?</div>
             <div className="row" style={{ gap: 6 }}>
               <button
                 data-testid={`event-media-exclude-confirm-yes-${item.id}`}
@@ -2333,9 +2587,9 @@ function EventThumbCard({
                   void onExclude();
                   setConfirmExclude(false);
                 }}
-                style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT }}
+                style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT, borderColor: "#b91c1c", color: "#b91c1c" }}
               >
-                Confirm
+                Remove
               </button>
               <button
                 data-testid={`event-media-exclude-confirm-cancel-${item.id}`}
@@ -2363,7 +2617,7 @@ function EventThumbCard({
               onClick={() => setConfirmExclude(true)}
               style={{ width: "100%", minHeight: CARD_BUTTON_HEIGHT, borderColor: "#b91c1c", color: "#b91c1c" }}
             >
-              Exclude
+              Remove
             </button>
           </div>
         )}
@@ -2394,7 +2648,7 @@ function ImageReviewView({
   onRestoreSingle: (id: number) => Promise<void>;
   onDone: () => Promise<void>;
 }) {
-  const [viewMode, setViewMode] = useState<"all" | "flagged" | "burst">("flagged");
+  const [viewMode, setViewMode] = useState<"all" | "flagged" | "burst" | "duplicate" | "screenshot">("flagged");
   const [sortMode, setSortMode] = useState<"date" | "size" | "sharpness">("date");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [previewById, setPreviewById] = useState<Record<number, string>>({});
@@ -2421,6 +2675,8 @@ function ImageReviewView({
   const visibleItems = useMemo(() => {
     if (viewMode === "all") return sortedItems;
     if (viewMode === "flagged") return sortedItems.filter((item) => item.imageFlags.length > 0);
+    if (viewMode === "duplicate") return sortedItems.filter((item) => item.duplicateGroupId);
+    if (viewMode === "screenshot") return sortedItems.filter((item) => item.imageFlags.includes("screenshot_or_meme"));
     return sortedItems.filter((item) => item.burstGroupId);
   }, [sortedItems, viewMode]);
 
@@ -2431,6 +2687,17 @@ function ImageReviewView({
       const current = map.get(item.burstGroupId) ?? [];
       current.push(item);
       map.set(item.burstGroupId, current);
+    }
+    return map;
+  }, [visibleItems]);
+
+  const duplicateGroups = useMemo(() => {
+    const map = new Map<string, ImageReviewItem[]>();
+    for (const item of visibleItems) {
+      if (!item.duplicateGroupId) continue;
+      const current = map.get(item.duplicateGroupId) ?? [];
+      current.push(item);
+      map.set(item.duplicateGroupId, current);
     }
     return map;
   }, [visibleItems]);
@@ -2522,6 +2789,8 @@ function ImageReviewView({
             <button data-testid="image-filter-all" className={viewMode === "all" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("all")}>All Images</button>
             <button data-testid="image-filter-flagged" className={viewMode === "flagged" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("flagged")}>Flagged Only</button>
             <button data-testid="image-filter-burst" className={viewMode === "burst" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("burst")}>Burst Groups</button>
+            <button data-testid="image-filter-duplicate" className={viewMode === "duplicate" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("duplicate")}>Duplicates</button>
+            <button data-testid="image-filter-screenshot" className={viewMode === "screenshot" ? "primaryBtn" : "secondaryBtn"} onClick={() => setViewMode("screenshot")}>Screenshots</button>
             <select data-testid="image-sort" value={sortMode} onChange={(e) => setSortMode(e.target.value as "date" | "size" | "sharpness")}>
               <option value="date">Date</option>
               <option value="size">File Size</option>
@@ -2538,12 +2807,16 @@ function ImageReviewView({
         }
       />
 
-      {viewMode === "burst" ? (
-        <div data-testid="image-burst-groups-view">
-          {Array.from(burstGroups.entries()).map(([groupId, groupItems]) => (
-            <div key={groupId} className="item" data-testid={`image-burst-group-${groupId}`}>
+      {viewMode === "burst" || viewMode === "duplicate" ? (
+        <div data-testid={viewMode === "burst" ? "image-burst-groups-view" : "image-duplicate-groups-view"}>
+          {Array.from((viewMode === "burst" ? burstGroups : duplicateGroups).entries()).map(([groupId, groupItems]) => (
+            <div key={groupId} className="item" data-testid={viewMode === "burst" ? `image-burst-group-${groupId}` : `image-duplicate-group-${groupId}`}>
               <div className="row" style={{ justifyContent: "space-between" }}>
-                <div className="muted">Burst group - {groupItems.length} shots, best auto-selected</div>
+                <div className="muted">
+                  {viewMode === "burst"
+                    ? `Burst group - ${groupItems.length} shots, best auto-selected`
+                    : `Duplicate group - ${groupItems.length} similar images`}
+                </div>
                 <div className="row">
                   <button data-testid={`image-keep-best-only-${groupId}`} className="secondaryBtn" onClick={() => void onKeepBestOnly(groupId)}>Keep Best Only</button>
                   <button data-testid={`image-keep-all-${groupId}`} className="secondaryBtn" onClick={() => void onKeepAll(groupId)}>Keep All</button>
@@ -2775,12 +3048,20 @@ function ImageCard({
         </div>
         <div className="mediaTileOverlayBottom">
           <strong className="truncateOneLine">{item.filename}</strong>
-          <div className="mediaTileMeta truncateOneLine">{formatFileSize(item.fileSizeBytes)} • {item.dateTaken ?? "(missing date)"}</div>
+          <div className="mediaTileMeta truncateOneLine">
+            {formatFileSize(item.fileSizeBytes)} • {item.dateTaken ?? "(missing date)"}
+            {item.blurScore != null ? ` • blur: ${item.blurScore.toFixed(0)}` : ""}
+            {item.aiQualityScore != null ? ` • AI: ${item.aiQualityScore.toFixed(1)}/10` : ""}
+          </div>
           <div className="mediaTileBadges">
             {item.imageFlags.includes("small_file") ? <span data-testid={`image-flag-small-${item.id}`} className="mediaTileBadge">small_file</span> : null}
             {item.imageFlags.includes("blurry") ? <span data-testid={`image-flag-blurry-${item.id}`} className="mediaTileBadge">blurry</span> : null}
+            {item.imageFlags.includes("poor_exposure") ? <span data-testid={`image-flag-exposure-${item.id}`} className="mediaTileBadge">poor_exposure</span> : null}
             {item.imageFlags.includes("burst_shot") ? <span data-testid={`image-flag-burst-${item.id}`} className="mediaTileBadge">burst_shot</span> : null}
+            {item.imageFlags.includes("duplicate") ? <span data-testid={`image-flag-duplicate-${item.id}`} className="mediaTileBadge">duplicate</span> : null}
+            {item.imageFlags.includes("screenshot_or_meme") ? <span data-testid={`image-flag-screenshot-${item.id}`} className="mediaTileBadge">screenshot</span> : null}
             {item.isBurstPrimary ? <span data-testid={`image-flag-best-${item.id}`} className="mediaTileBadge mediaTileBadgeBest">Best</span> : null}
+            {item.aiContentClass && item.aiContentClass !== "photo" ? <span data-testid={`image-flag-ai-class-${item.id}`} className="mediaTileBadge" title="AI classified">AI</span> : null}
           </div>
         </div>
       </div>
@@ -2913,15 +3194,15 @@ function VideoReviewView({
     return () => window.removeEventListener("keydown", onKey);
   }, [modalIndex]);
 
-  async function ensurePreview(id: number) {
-    if (previewById[id]) return previewById[id];
-    const src = (await getEventGroupMediaPreview(id)) ?? "";
-    setPreviewById((prev) => ({ ...prev, [id]: src }));
+  function getOrSetVideoPreview(item: VideoReviewItem): string {
+    if (previewById[item.id]) return previewById[item.id];
+    const src = getVideoSrcUrl(item.currentPath);
+    setPreviewById((prev) => ({ ...prev, [item.id]: src }));
     return src;
   }
 
-  async function handleOpen(item: VideoReviewItem, index: number) {
-    await ensurePreview(item.id);
+  function handleOpen(item: VideoReviewItem, index: number) {
+    getOrSetVideoPreview(item);
     if (item.durationSecs < 10) {
       setInlinePlayingId(item.id);
       return;
@@ -3086,7 +3367,7 @@ function VideoReviewView({
                         {inlinePlayingId === item.id && previewSrc ? (
                           <video data-testid={`video-inline-player-${item.id}`} src={previewSrc} autoPlay muted controls className="mediaTileVideoAsset" />
                         ) : (
-                          <button data-testid={`video-open-${item.id}`} className="mediaTileOpen" onClick={() => void handleOpen(item, startIndex + offset)}>
+                          <button data-testid={`video-open-${item.id}`} className="mediaTileOpen" onClick={() => handleOpen(item, startIndex + offset)}>
                             <img className="mediaTileImage mediaTileImageVideo" src={thumbSrc} alt={item.filename} />
                             <span data-testid={`video-play-overlay-${item.id}`} className="mediaTilePlayGlyph">▶</span>
                           </button>
@@ -3257,7 +3538,8 @@ function createDefaultAiModels(): AiModelsState {
     dateEstimationFallback: null,
     eventNaming: { provider: "anthropic", model: "claude-sonnet-4-6" },
     eventNamingFallback: null,
-    groupingPass1: null
+    groupingPass1: null,
+    imageReview: null,
   };
 }
 
@@ -3291,7 +3573,8 @@ function normalizeAiTaskModels(raw: Partial<AiModelsState> | AiModelsState | und
     dateEstimationFallback: normalizeAiModelSelection(raw?.dateEstimationFallback),
     eventNaming,
     eventNamingFallback: normalizeAiModelSelection(raw?.eventNamingFallback),
-    groupingPass1: normalizeAiModelSelection(raw?.groupingPass1)
+    groupingPass1: normalizeAiModelSelection(raw?.groupingPass1),
+    imageReview: normalizeAiModelSelection(raw?.imageReview),
   };
 }
 

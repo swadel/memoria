@@ -4,7 +4,7 @@
 
 > Intelligently organize local photos and videos into a structured, event-based archive.
 
-Memoria is a Windows-first desktop application with a guided, phase-by-phase workflow. It indexes local photos and videos, runs image-quality/burst review, lets you review/exclude short or unwanted videos, enforces date metadata, and organizes media into meaningful event folders — all with you in control of every decision.
+Memoria is a Windows-first desktop application with a guided, phase-by-phase workflow. It indexes local photos and videos, runs image-quality and burst review, lets you review and exclude short or unwanted videos, enforces date metadata, groups media into location-aware event folders using a two-pass AI pipeline, and organizes everything into a clean archive — all with you in control of every decision.
 
 ---
 
@@ -17,13 +17,15 @@ The folder structure Memoria produces looks like this:
 ```
 /organized/
   2025/
-    2025 - Family Christmas/
-    2025 - Thatcher Birthday/
-    2025 - Fourth of July/
-    2025 - Beach Vacation/
+    2025 - Destin Family Vacation/
+    2025 - Home Christmas Morning/
+    2025 - Chicago Weekend Trip/
+    2025 - Soccer Tournament/
+    2025 - Birthday Party/
     2025 - Misc/
   2026/
-    2026 - New Years/
+    2026 - Yellowstone Wildlife Trip/
+    2026 - March Activities/
     2026 - Misc/
 /recycle/       ← items you've marked for deletion (soft delete, never permanent)
 ```
@@ -46,27 +48,6 @@ The folder structure Memoria produces looks like this:
 - Image Review completion advances remaining active items to `image_reviewed`
 - Completion shows a busy overlay and transitions directly into Video Review
 
-### Date Metadata Enforcement
-Amazon Photos, Google Photos, and most photo management tools order images by the `DateTimeOriginal` EXIF field. If that field is missing, your photos end up out of order or dumped into an "unknown date" bucket.
-
-Memoria checks every `video_reviewed` item. If `DateTimeOriginal` is missing or invalid (for example `1970:01:01`), it:
-1. Flags the item with `date_needs_review=1`
-2. Uses AI to estimate a likely date with confidence/reasoning
-3. Displays the item in Date Approval with a thumbnail preview
-4. Writes approved dates back to metadata only after user action
-
-All metadata changes are logged to a full audit trail.
-
-### Intelligent Event Grouping
-Memoria clusters your photos into events automatically:
-- Groups `date_verified` items by time proximity
-- Applies deterministic naming for misc/holiday-like groups
-- Uses AI to suggest event names for larger clusters
-- Lets you review and rename event groups before finalize
-- Event Groups includes a phase CTA (`Done - Proceed to Finalize`) and, after finalize completes, changes to `Back to Dashboard`
-
-Photos not associated with any event go into a `[YEAR] - Misc` folder.
-
 ### Video Review (Pre-Date-Enforcement)
 - Dedicated Video Review phase between Image Review and Date Enforcement
 - Reviews all `video/*` items in `image_reviewed` state with file size and duration metadata
@@ -78,6 +59,66 @@ Photos not associated with any event go into a `[YEAR] - Misc` folder.
 - Completing Video Review advances remaining active items to `video_reviewed`
 - Proceeding from Video Review immediately runs Date Enforcement (with loading UI) and lands on Date Approval
 - Excluded videos are not included in downstream phases until restored
+
+### Date Metadata Enforcement
+Amazon Photos, Google Photos, and most photo management tools order images by the `DateTimeOriginal` EXIF field. If that field is missing, your photos end up out of order or dumped into an "unknown date" bucket.
+
+Memoria checks every `video_reviewed` item. If `DateTimeOriginal` is missing or invalid (for example `1970:01:01`), it:
+1. Flags the item with `date_needs_review=1`
+2. Uses AI to estimate a likely date with confidence and reasoning
+3. Displays the item in Date Approval with a thumbnail preview
+4. Writes approved dates back to metadata only after user action
+
+All metadata changes are logged to a full audit trail.
+
+### Location-Aware Event Grouping
+Memoria clusters your photos into events using a two-pass AI pipeline with rich location analysis:
+
+- Groups `date_verified` items into time-based clusters using a configurable threshold (default: 2 days)
+- Computes cluster-level location facts by aggregating GPS coordinates across all items:
+  - **GPS coverage** — what percentage of items have coordinates
+  - **Dominant location** — the most common city/region with confidence scoring
+  - **Location consistency** — whether all geocoded items share the same location (`consistent`, `mixed`, or `none`)
+  - **Home distance** — median distance from the user's configured home location
+  - **Away-from-home detection** — composite heuristic using median distance, percentage of items outside home radius, and dominant location confidence
+  - **Travel cluster signal** — identifies multi-day away-from-home clusters as likely vacations or trips
+- **Pass 1** (cluster metadata analysis) derives structured event clues including travel indicators and destination candidates
+- **Pass 2** (event naming) produces the final folder name using anti-generic naming rules and destination awareness
+- Applies a banned-name list to prevent vague outputs like "Family Gathering" or "Weekend Moments"
+- Destination-aware naming prefers specific place names when the cluster is away from home (e.g., "2025 - Destin Family Vacation")
+- Improved collision handling tries semantic differentiators (date ranges, locations) before numeric suffixes
+- Large generic clusters (20+ items) are automatically re-split for better granularity
+- Reverse geocoding results are cached persistently in SQLite to minimize external API calls across runs
+- All cluster location facts are persisted for debugging and audit traceability
+- Lets you review and rename event groups before finalize
+
+Photos not associated with any event go into a `[YEAR] - Misc` folder.
+
+### AI Pipeline
+Memoria uses a configurable multi-model AI pipeline with five independently configurable task slots:
+
+| Slot | Purpose | Required? |
+|---|---|---|
+| Date Estimation — Primary | Estimates dates for items with missing EXIF metadata | Yes |
+| Date Estimation — Fallback | Backup model for date estimation if the primary fails | No |
+| Grouping Pass 1 — Cluster Analysis | Derives structured event clues and travel indicators | No (falls back to event naming model) |
+| Grouping Pass 2 — Event Naming | Produces the final event/folder name | Yes |
+| Event Naming — Fallback | Backup model for event naming if the primary fails | No |
+
+Supported providers: **OpenAI** and **Anthropic**. Each slot can be configured with any provider/model combination.
+
+When AI is unavailable, all flows have offline fallbacks:
+- Date estimation uses file metadata and visual cues
+- Event naming falls back to location-aware or date-based names (e.g., "Nashville Trip" or "March Activities") instead of generic labels
+
+### Home Location
+An optional Home Location setting enables home-vs-away detection for smarter event naming:
+
+- Enter a home address or area (e.g., "Nashville, TN") and it is geocoded server-side via Nominatim
+- Configure an optional label and radius (default: 25 miles)
+- The raw street address is never sent to any AI model — only derived facts like `away_from_home` and `median_distance_from_home_miles`
+- When configured, clusters away from home with a known destination get names like "2025 - Destin Family Vacation" instead of "Family Gathering"
+- Fully optional: existing users without a home location configured see no behavioral change
 
 ### Dashboard and Session UX
 - Dashboard uses a `ProgressHero` card as the primary status and action surface
@@ -127,22 +168,24 @@ Memoria never hard-deletes media in the normal pipeline:
 | Component | Technology |
 |---|---|
 | Desktop framework | Tauri 2.0 (Rust + WebView2) |
-| Frontend | React 18 + TypeScript + Tailwind CSS + shadcn/ui |
-| AI tasks | OpenAI/Anthropic routing for date estimation and event naming |
+| Frontend | React 18 + TypeScript + Tailwind CSS |
+| AI providers | OpenAI and Anthropic with per-task model routing |
+| Geocoding | Nominatim (OpenStreetMap) with persistent local cache |
 | Metadata | exiftool (bundled binary) |
 | Thumbnail generation | ffmpeg (bundled binary) |
 | Database | SQLite via rusqlite (WAL mode) |
 | Credential storage | keyring crate → Windows Credential Manager |
+| iCloud bridge | Python sidecar via pyicloud (optional) |
 
 ---
 
 ## Requirements
 
 - **OS**: Windows 11 (macOS support is a planned future milestone)
-- **Media source**: Local media files in the configured Working Directory.
-- **API keys**: OpenAI and/or Anthropic key for AI date estimation/event naming (optional if running fallback-only behavior).
-- **Storage**: Enough local disk space for your downloaded originals plus organized copies during processing.
-- **Tools**: Node.js 20+, Rust stable, Python 3.11+, and [Tauri prerequisites](https://tauri.app/v2/guides/getting-started/prerequisites/)
+- **Media source**: Local media files in the configured Working Directory
+- **API keys**: OpenAI and/or Anthropic key for AI date estimation and event naming (optional — offline fallbacks work without keys)
+- **Storage**: Enough local disk space for your media originals plus organized copies during processing
+- **Tools**: Node.js 20+, Rust stable, and [Tauri prerequisites](https://tauri.app/v2/guides/getting-started/prerequisites/). Python 3.11+ is needed only if using the optional iCloud download bridge.
 
 ---
 
@@ -192,8 +235,10 @@ npm run tauri dev
    - `Skip` clears review-required state and marks item `date_verified`
 
 5. **Group**
-   - Groups `date_verified` items into event clusters
-   - Creates event groups and links items with `status='grouped'`
+   - Groups `date_verified` items into time-based clusters
+   - Runs two-pass AI analysis: cluster metadata (Pass 1) then event naming (Pass 2)
+   - Computes cluster location facts and home-distance signals
+   - Creates event groups with location-aware, destination-specific names
    - Supports click-through detail review, multiselect item moves, soft delete/restore, manual group creation, and delete of empty groups only
 
 6. **Finalize**
@@ -206,22 +251,24 @@ npm run tauri dev
    - Clears pipeline DB state using a single transaction
    - Optionally deletes generated folders: `/staging`, `/organized`, `/recycle`
    - Delete-files mode recreates those folders as empty directories
-   - Reset dialog now surfaces inline errors and only closes on success
-- This same dialog is available from the dashboard `Start New Session` action post-finalize
+   - Reset dialog surfaces inline errors and only closes on success
+   - This same dialog is available from the dashboard `Start New Session` action post-finalize
 
 ---
 
 ## Dev & Test Commands
 
 ```bash
-npm run lint          # TypeScript checks
-npm run build         # Frontend build
-npm run check:rust    # Rust compile check
-npm run test:rust     # Rust unit tests
-npm run test:ui:browser  # Browser E2E suite
-npm run test:ui:desktop  # Desktop E2E suite
-npm run test:ui      # All Playwright projects
-npm test              # Full local test pass
+npm run lint             # TypeScript type checks
+npm run build            # Frontend build (tsc + vite)
+npm run check:rust       # Rust compile check
+npm run test:rust        # Rust unit tests (79 tests)
+npm run test:ui:browser  # Browser E2E suite (Playwright, Chromium)
+npm run test:ui:desktop  # Desktop E2E suite (Playwright, real Tauri app)
+npm run test:ui          # All Playwright projects
+npm run test:ui:headed   # Playwright in headed mode (debugging)
+npm run test:unit:ui     # Vitest unit tests
+npm test                 # Full local test pass (lint + Rust tests)
 ```
 
 ---
@@ -230,42 +277,68 @@ npm test              # Full local test pass
 
 All settings are managed through the in-app Settings panel. Nothing requires manual config file editing.
 
+### General Settings
+
 | Setting | Default | Description |
 |---|---|---|
 | Output directory | `~/Pictures/Memoria` | Where organized folders are created |
 | Download concurrency | 3 | Parallel iCloud downloads |
 | AI cost cap | $20.00 | Processing pauses if this amount is reached |
-| Grouping time window | 2 days | Max default gap between photos in the same event cluster |
+| Grouping time window | 2 days | Max gap between photos in the same event cluster |
 | HEIC handling | Keep originals | Whether to convert HEIC to JPEG on download |
-| Runtime logging | `info` | Set `MEMORIA_LOG_LEVEL` to `off`, `warn`, `info`, or `debug` for terminal verbosity |
+
+### AI Model Configuration
+
+Five independently configurable model slots in Settings:
+
+| Slot | Default | Notes |
+|---|---|---|
+| Date Estimation — Primary Model | Anthropic claude-sonnet-4-6 | Required |
+| Date Estimation — Fallback Model | Not configured | Optional, activates if primary fails |
+| Grouping Pass 1 — Cluster Analysis Model | Not configured | Optional, falls back to event naming model |
+| Grouping Pass 2 — Event Naming Model | Anthropic claude-sonnet-4-6 | Required |
+| Event Naming — Fallback Model | Not configured | Optional, activates if primary fails |
+
+Optional slots show a **Configure** button when unconfigured and a **Clear** button when set. Required slots cannot be cleared.
+
+### Home Location
+
+| Setting | Default | Description |
+|---|---|---|
+| Home Address / Area | Not configured | City, zip, or address — geocoded on save via Nominatim |
+| Home Label | (empty) | Optional friendly name (e.g., "Home", "Nashville") |
+| Home Radius | 25 miles | Distance threshold for home-vs-away classification |
+
+When configured, the grouping pipeline uses home location to detect travel clusters and produce destination-aware event names.
 
 ### Runtime Logging
 
 Memoria writes timestamped backend logs to the terminal during long-running operations (indexing, date evaluation, grouping, finalize, thumbnail resolution).
-
-Set log level before launch:
 
 ```powershell
 $env:MEMORIA_LOG_LEVEL='info'   # off | warn | info | debug
 npm run tauri dev
 ```
 
-You will see per-stage and per-item progress messages such as:
-- session start/completion
-- `file X/Y` indexing progress
-- date-review decisions (`flagged` vs `verified`)
-- group creation and file finalization
+To dump full expanded AI prompts during grouping (useful for debugging naming quality):
+
+```powershell
+$env:MEMORIA_LOG_PROMPTS='1'
+npm run tauri dev
+```
 
 ---
 
 ## Important Limitations
 
-**AI costs**: AI analysis is not free. Memoria shows a cost estimate before starting any AI-powered processing step and will pause if you set a cost cap. You are billed directly by OpenAI through your own API key.
+**AI costs**: AI analysis is not free. Memoria shows a cost estimate before starting any AI-powered processing step and will pause if you set a cost cap. You are billed directly by OpenAI or Anthropic through your own API key.
 
 **Windows long paths**: Windows has a default 260-character path limit. It is recommended to enable long path support:
+
 ```
 HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1
 ```
+
 Memoria uses the `\\?\` extended-length path prefix internally, but enabling this setting provides an additional safety net.
 
 ---
@@ -277,23 +350,44 @@ memoria/
   src-tauri/              # Rust backend
     src/
       commands/           # Tauri IPC command handlers
-      services/           # Business logic (index, date, grouping, organize)
+        settings.rs       #   App config, AI models, home location, reset
+        download.rs       #   Media download/indexing
+        organize.rs       #   File organization and finalization
+        metadata.rs       #   EXIF metadata operations
+        image_review.rs   #   Image review commands
+        video_review.rs   #   Video review commands
+      services/           # Business logic
+        ai_client.rs      #   Two-pass AI pipeline, prompt builders, validation
+        event_grouper.rs  #   Cluster generation, location analysis, naming
+        geocoding.rs      #   Forward/reverse geocoding, haversine, persistent cache
+        date_enforcer.rs  #   Date metadata enforcement
+        file_organizer.rs #   File copy/move operations
+        exiftool.rs       #   Exiftool/ffmpeg integration
+        image_review.rs   #   Image flagging, burst detection
+        video_review.rs   #   Video review logic
+        settings.rs       #   Secret/credential storage
+        runtime_log.rs    #   Runtime logging
       db/                 # SQLite schema, migrations, queries
-      models/             # Shared data structures
   src/                    # React frontend
-    App.tsx               # Main UI (Dashboard, Image Review, Video Review, Date Approval, Events, Settings)
-    lib/api.ts            # Tauri invoke wrappers
-  vendor/                 # Bundled third-party binaries
-    exiftool.exe
-    ffmpeg.exe
+    App.tsx               # Main UI (Dashboard, Reviews, Date Approval, Events, Settings)
+    lib/api.ts            # Tauri invoke wrappers and type contracts
+    styles.css            # Application styles
+  sidecar/                # Optional Python iCloud bridge
+  tests/
+    ui/
+      browser/            # Playwright browser E2E tests
+      desktop/            # Playwright desktop E2E tests (real Tauri app)
+      helpers/            # Shared test utilities and browser mocks
+  vendor/                 # Bundled third-party binaries (exiftool, ffmpeg)
 ```
 
 ## Acknowledgments
 
-- [pyicloud](https://github.com/picklepete/pyicloud) — iCloud web API access
-- [icloudpd](https://github.com/icloud-photos-downloader/icloud_photos_downloader) — community that maintains pyicloud compatibility
 - [exiftool](https://exiftool.org/) by Phil Harvey — the gold standard for photo metadata
 - [Tauri](https://tauri.app/) — lightweight, performant desktop framework
+- [OpenStreetMap / Nominatim](https://nominatim.openstreetmap.org/) — geocoding for location-aware grouping
+- [pyicloud](https://github.com/picklepete/pyicloud) — iCloud web API access
+- [icloudpd](https://github.com/icloud-photos-downloader/icloud_photos_downloader) — community that maintains pyicloud compatibility
 
 ---
 

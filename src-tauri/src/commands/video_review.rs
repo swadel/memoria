@@ -73,13 +73,14 @@ fn restore_media_item_impl(media_item_id: i64, state: &AppState) -> Result<()> {
 }
 
 #[tauri::command]
-pub fn complete_video_review_and_run_grouping(state: State<'_, AppState>) -> Result<(), String> {
-    tauri::async_runtime::block_on(complete_video_review_and_run_grouping_impl(&state)).map_err(|e| e.to_string())
+pub fn complete_video_review_and_run_grouping(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    tauri::async_runtime::block_on(complete_video_review_and_run_grouping_impl(&state, Some(&app_handle))).map_err(|e| e.to_string())
 }
 
-pub async fn complete_video_review_and_run_grouping_impl(state: &AppState) -> Result<()> {
+pub async fn complete_video_review_and_run_grouping_impl(state: &AppState, app_handle: Option<&tauri::AppHandle>) -> Result<()> {
     let conn = state.open_conn()?;
     video_review::complete_video_review(&conn)?;
+    let _ = app_handle; // reserved for future progress emission
     Ok(())
 }
 
@@ -112,7 +113,7 @@ mod tests {
         .expect("insert");
         drop(conn);
         let app = app_state_for(db_path.clone());
-        complete_video_review_and_run_grouping_impl(&app)
+        complete_video_review_and_run_grouping_impl(&app, None)
             .await
             .expect("transition");
         let conn2 = init_db(&db_path).expect("reopen");

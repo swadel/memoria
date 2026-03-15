@@ -9,7 +9,7 @@ fn is_invalid_date(value: &str) -> bool {
     value.starts_with("1970:01:01") || value.starts_with("0000:00:00")
 }
 
-pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
+pub async fn evaluate(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::AppHandle>) -> Result<()> {
     runtime_log::info("date_enforcer", "Starting missing-date evaluation.");
     let mut stmt = conn.prepare(
         "SELECT id, filename, COALESCE(current_path, ''), date_taken
@@ -25,13 +25,23 @@ pub async fn evaluate(conn: &Connection, ai: &AiClient) -> Result<()> {
             row.get::<_, Option<String>>(3)?,
         ))
     })?;
+    let all_rows: Vec<_> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let total = all_rows.len();
+    runtime_log::emit_pipeline_progress(app_handle, "date_enforcement", "Checking dates...", 0, total);
 
     let mut processed = 0_i64;
     let mut flagged_for_review = 0_i64;
     let mut verified = 0_i64;
-    for row in rows {
-        let (id, filename, path, db_date) = row?;
+    for (idx, row) in all_rows.into_iter().enumerate() {
+        let (id, filename, path, db_date) = row;
         processed += 1;
+        runtime_log::emit_pipeline_progress(
+            app_handle,
+            "date_enforcement",
+            &format!("Checking: {filename}"),
+            idx + 1,
+            total,
+        );
         runtime_log::info(
             "date_enforcer",
             format!("Evaluating item id={id} filename='{}' path='{}'.", filename, path),
@@ -180,7 +190,7 @@ mod tests {
         .expect("insert missing date item");
 
         let ai = AiClient::new(None, None, AiRoutingConfig::default());
-        evaluate(&conn, &ai).await.expect("evaluate");
+        evaluate(&conn, &ai, None).await.expect("evaluate");
 
         let valid_status: String = conn
             .query_row("SELECT status FROM media_items WHERE icloud_id='ok-1'", [], |r| r.get(0))
@@ -270,6 +280,16 @@ mod tests {
             .expect("date_set audit count");
         assert_eq!(audit_count, 1);
 
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn evaluate_with_none_handle_succeeds_on_empty_db() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("db");
+        let ai = AiClient::new(None, None, AiRoutingConfig::default());
+        evaluate(&conn, &ai, None).await.expect("evaluate on empty db");
         drop(conn);
         let _ = fs::remove_file(db_path);
     }

@@ -71,6 +71,11 @@ impl AppState {
                     "ai_model_grouping_pass1_provider",
                     "ai_model_grouping_pass1",
                 );
+                routing.image_review = task_model_from_settings_optional(
+                    &conn,
+                    "ai_model_image_review_provider",
+                    "ai_model_image_review",
+                );
                 (openai, anthropic, routing)
             }
             Err(_) => (
@@ -168,6 +173,8 @@ pub fn run() {
             commands::settings::clear_home_location,
             commands::settings::set_output_directory,
             commands::settings::reset_session,
+            commands::settings::get_image_review_settings,
+            commands::settings::set_image_review_settings,
             commands::download::start_download_session,
             commands::image_review::run_image_review_scan,
             commands::image_review::get_image_review_items,

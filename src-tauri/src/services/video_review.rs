@@ -2,11 +2,11 @@ use anyhow::{anyhow, Result};
 use rusqlite::params;
 use std::path::{Path, PathBuf};
 
-use crate::{db, services::exiftool};
+use crate::{db, services::{exiftool, runtime_log}};
 
 const VIDEO_PHASE_STATE_KEY: &str = "video_review_phase_state";
 
-pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Path) -> Result<()> {
+pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Path, app_handle: Option<&tauri::AppHandle>) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT id, filename, COALESCE(current_path, ''), COALESCE(file_size, 0), duration_secs, video_width, video_height, video_codec
          FROM media_items
@@ -25,9 +25,14 @@ pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Pat
         ))
     })?;
 
+    // Collect all rows first so we know the total count for progress
+    let all_rows: Vec<_> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let total = all_rows.len();
+    runtime_log::emit_pipeline_progress(app_handle, "video_prep", "Preparing video review...", 0, total);
+
     let mut video_count = 0_i64;
-    for row in rows {
-        let (id, _filename, current_path, file_size, duration, width, height, codec) = row?;
+    for (idx, row) in all_rows.into_iter().enumerate() {
+        let (id, _filename, current_path, file_size, duration, width, height, codec) = row;
         if current_path.trim().is_empty() {
             continue;
         }
@@ -35,7 +40,6 @@ pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Pat
         if !media_path.exists() {
             continue;
         }
-        video_count += 1;
         let meta = exiftool::read_metadata(&media_path).await?;
         let resolved_size = if file_size > 0 {
             file_size
@@ -59,6 +63,14 @@ pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Pat
             }
             let _ = exiftool::create_video_poster_ffmpeg(&media_path, &poster_path).await;
         }
+        video_count += 1;
+        runtime_log::emit_pipeline_progress(
+            app_handle,
+            "video_prep",
+            &format!("Prepared video {}/{}", idx + 1, total),
+            idx + 1,
+            total,
+        );
     }
 
     let next_state = if video_count > 0 { "in_progress" } else { "complete" };
@@ -334,6 +346,20 @@ mod tests {
         complete_video_review(&conn).expect("complete");
         let state = video_phase_state(&conn).expect("state");
         assert_eq!(state, "complete");
+    }
+
+    #[tokio::test]
+    async fn prepare_video_review_with_no_videos_and_none_handle_does_not_panic() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("db");
+        let root = std::env::temp_dir().join(format!("memoria-video-prep-empty-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&root).expect("root");
+        prepare_video_review(&conn, &root, None)
+            .await
+            .expect("prepare succeeds with empty DB");
+        let state = video_phase_state(&conn).expect("state");
+        assert_eq!(state, "complete");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

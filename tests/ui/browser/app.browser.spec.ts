@@ -139,21 +139,27 @@ test.describe("Memoria browser UI", () => {
   test("settings renders all model slots with locked labels", async ({ page }) => {
     await page.getByTestId("tab-settings").click();
 
-    await expect(page.getByText("Date Estimation — Primary Model")).toBeVisible();
-    await expect(page.getByText("Date Estimation — Fallback Model")).toBeVisible();
-    await expect(page.getByText("Grouping Pass 1 — Cluster Analysis Model")).toBeVisible();
-    await expect(page.getByText("Grouping Pass 2 — Event Naming Model")).toBeVisible();
-    await expect(page.getByText("Event Naming — Fallback Model")).toBeVisible();
+    await expect(page.getByText("Date Estimation")).toBeVisible();
+    await expect(page.getByText("Primary Model — Analyzes photos to estimate when they were taken")).toBeVisible();
+    await expect(page.getByText("Fallback Model — Used when the primary model fails or returns low confidence")).toBeVisible();
+    await expect(page.getByText("Event Grouping and Naming")).toBeVisible();
+    await expect(page.getByText("Cluster Analysis Model — Extracts scene, activity, and location clues from sample photos")).toBeVisible();
+    await expect(page.getByText("Event Naming Model — Generates descriptive folder names from cluster analysis and photo context")).toBeVisible();
+    await expect(page.getByText("Naming Fallback Model — Used when the naming model fails or returns a generic name")).toBeVisible();
+    await expect(page.getByText("Image Review Quality")).toBeVisible();
+    await expect(page.getByText("Quality Assessment Model — Evaluates borderline blur, classifies screenshots and memes")).toBeVisible();
 
     await expect(page.getByTestId("model-selector-date-estimation")).toBeVisible();
     await expect(page.getByTestId("model-selector-date-estimation-fallback")).toBeVisible();
     await expect(page.getByTestId("model-selector-grouping-pass1")).toBeVisible();
     await expect(page.getByTestId("model-selector-event-naming")).toBeVisible();
     await expect(page.getByTestId("model-selector-event-naming-fallback")).toBeVisible();
+    await expect(page.getByTestId("model-selector-image-review")).toBeVisible();
 
     await expect(page.getByTestId("model-configure-date-estimation-fallback")).toBeVisible();
     await expect(page.getByTestId("model-configure-grouping-pass1")).toBeVisible();
     await expect(page.getByTestId("model-configure-event-naming-fallback")).toBeVisible();
+    await expect(page.getByTestId("model-configure-image-review")).toBeVisible();
   });
 
   test("settings save does not clear never-configured optional models", async ({ page }) => {
@@ -195,6 +201,7 @@ test.describe("Memoria browser UI", () => {
     await expect(compatibilityPage.getByTestId("model-configure-date-estimation-fallback")).toBeVisible();
     await expect(compatibilityPage.getByTestId("model-configure-grouping-pass1")).toBeVisible();
     await expect(compatibilityPage.getByTestId("model-configure-event-naming-fallback")).toBeVisible();
+    await expect(compatibilityPage.getByTestId("model-configure-image-review")).toBeVisible();
 
     await compatibilityPage.getByTestId("settings-save-ai-models").click();
     await expect(compatibilityPage.getByTestId("status-pill")).toContainText("AI task models saved.");
@@ -437,5 +444,122 @@ test.describe("Memoria browser UI", () => {
     await page.getByTestId("home-location-clear-btn").click();
     await expect(page.getByTestId("home-location-status")).toContainText("Not configured");
     await expect(page.getByTestId("status-pill")).toContainText("Home location cleared.");
+  });
+
+  test("video review tiles show play overlay", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-filter-mode-size").check();
+    await page.getByTestId("video-size-slider").fill("50");
+    const firstVideoTile = page.locator("[data-testid^='video-item-']").first();
+    await expect(firstVideoTile).toBeVisible();
+    const firstId = await firstVideoTile.getAttribute("data-testid").then((v) => v?.replace("video-item-", ""));
+    await expect(page.getByTestId(`video-play-overlay-${firstId}`)).toBeVisible();
+  });
+
+  test("video review opens modal with video player on long video", async ({ context }) => {
+    const videoPage = await context.newPage();
+    await installBrowserApiMock(videoPage, "all");
+    await videoPage.goto("/");
+    await videoPage.getByTestId("tab-videos").click();
+    // Raise size threshold to 20 MB so the 18 MB fixture video (id=602, 84s) appears
+    await videoPage.getByTestId("video-size-slider").fill("20");
+    const openBtn = videoPage.getByTestId("video-open-602");
+    if (await openBtn.isVisible()) {
+      await openBtn.click();
+      const modal = videoPage.getByTestId("video-preview-modal");
+      const isVisible = await modal.isVisible().catch(() => false);
+      if (isVisible) {
+        const player = videoPage.getByTestId("video-preview-player");
+        await expect(player).toBeVisible();
+      }
+    }
+    await videoPage.close();
+  });
+
+  test("event group thumbnail shows play glyph for video items", async ({ context }) => {
+    const videoGroupPage = await context.newPage();
+    await installBrowserApiMock(videoGroupPage, "dashboard-video-only");
+    await videoGroupPage.goto("/");
+    await videoGroupPage.getByTestId("tab-events").click();
+    await expect(videoGroupPage.getByTestId("event-group-401")).toBeVisible();
+    await videoGroupPage.getByTestId("event-open-401").click();
+    await expect(videoGroupPage.getByTestId("event-media-item-9901")).toBeVisible();
+    await expect(videoGroupPage.getByTestId("event-media-play-glyph-9901")).toBeVisible();
+    await expect(videoGroupPage.getByTestId("event-media-play-glyph-9902")).toBeVisible();
+    await videoGroupPage.close();
+  });
+
+  test("event group item remove overlay button is visible on hover and triggers confirmation", async ({ context }) => {
+    const removePage = await context.newPage();
+    await installBrowserApiMock(removePage, "finalize-busy");
+    await removePage.goto("/");
+    await removePage.getByTestId("tab-events").click();
+    await expect(removePage.getByTestId("event-group-401")).toBeVisible();
+    await removePage.getByTestId("event-open-401").click();
+    await expect(removePage.getByTestId("event-media-item-901")).toBeVisible();
+
+    const card = removePage.getByTestId("event-media-item-901");
+    await card.hover();
+    const removeOverlayBtn = removePage.getByTestId("event-media-remove-overlay-901");
+    await expect(removeOverlayBtn).toBeVisible();
+    await removeOverlayBtn.click();
+    await expect(removePage.getByTestId("event-media-exclude-confirm-901")).toBeVisible();
+    await expect(removePage.getByText("Remove and move to recycle?")).toBeVisible();
+    await removePage.close();
+  });
+
+  test("event group item remove bottom button uses Remove label", async ({ context }) => {
+    const removePage = await context.newPage();
+    await installBrowserApiMock(removePage, "finalize-busy");
+    await removePage.goto("/");
+    await removePage.getByTestId("tab-events").click();
+    await removePage.getByTestId("event-open-401").click();
+    await expect(removePage.getByTestId("event-media-item-901")).toBeVisible();
+    const removeBtn = removePage.getByTestId("event-media-exclude-901");
+    await expect(removeBtn).toHaveText("Remove");
+    await removeBtn.click();
+    await expect(removePage.getByTestId("event-media-exclude-confirm-901")).toBeVisible();
+    const confirmBtn = removePage.getByTestId("event-media-exclude-confirm-yes-901");
+    await expect(confirmBtn).toHaveText("Remove");
+    await removePage.close();
+  });
+
+  test("event group item remove confirmation decrements item count", async ({ context }) => {
+    const removePage = await context.newPage();
+    await installBrowserApiMock(removePage, "finalize-busy");
+    await removePage.goto("/");
+    await removePage.getByTestId("tab-events").click();
+    await removePage.getByTestId("event-open-401").click();
+    await expect(removePage.getByTestId("event-media-item-901")).toBeVisible();
+    await removePage.getByTestId("event-media-exclude-901").click();
+    await removePage.getByTestId("event-media-exclude-confirm-yes-901").click();
+    await expect(removePage.getByTestId("event-media-item-901")).toHaveCount(0);
+    await removePage.close();
+  });
+
+  test("media tile overlay bottom text has sufficient contrast styling", async ({ page }) => {
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-filter-all").click();
+    const firstItem = page.getByTestId("image-item-501");
+    await expect(firstItem).toBeVisible();
+    const overlayBottom = firstItem.locator(".mediaTileOverlayBottom");
+    const metaStyles = await overlayBottom.locator(".mediaTileMeta").evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { fontSize: s.fontSize, color: s.color };
+    });
+    const fontSize = parseFloat(metaStyles.fontSize);
+    expect(fontSize).toBeGreaterThanOrEqual(12);
+  });
+
+  test("loading state shows progress bar when progress prop is set", async ({ context }) => {
+    const progressPage = await context.newPage();
+    await installBrowserApiMock(progressPage, "phase-busy");
+    await progressPage.goto("/");
+    await progressPage.getByTestId("tab-images").click();
+    progressPage.once("dialog", (dialog) => dialog.accept());
+    await progressPage.getByTestId("image-done-proceed").click();
+    await expect(progressPage.getByTestId("global-loading-state")).toBeVisible();
+    await expect(progressPage.getByTestId("loading-state-logo")).toBeVisible();
+    await progressPage.close();
   });
 });

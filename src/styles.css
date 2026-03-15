@@ -730,11 +730,50 @@ button:hover {
   background: transparent;
 }
 
+.eventThumbImageWrap {
+  position: relative;
+}
+
+.eventThumbOverlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 6px;
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.45) 0%, rgba(2, 6, 23, 0) 40%);
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+
+.eventThumbCard:hover .eventThumbOverlay,
+.eventThumbCard.selected .eventThumbOverlay {
+  opacity: 1;
+}
+
+.eventThumbOverlay .mediaTileIconButton {
+  pointer-events: auto;
+}
+
 .eventThumbImage {
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
   border-radius: 10px;
+}
+
+.eventThumbPlayGlyph {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 22px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
 }
 
 .mediaTile {
@@ -783,7 +822,7 @@ button:hover {
   flex-direction: column;
   justify-content: space-between;
   padding: 8px;
-  background: linear-gradient(180deg, rgba(2, 6, 23, 0.4) 0%, rgba(2, 6, 23, 0) 38%, rgba(2, 6, 23, 0.58) 100%);
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.5) 0%, rgba(2, 6, 23, 0) 38%, rgba(2, 6, 23, 0.75) 100%);
   opacity: 0;
   transition: opacity 140ms ease;
   pointer-events: none;
@@ -805,11 +844,12 @@ button:hover {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
 
 .mediaTileMeta {
-  color: rgba(248, 250, 252, 0.85);
-  font-size: 11px;
+  color: #f8fafc;
+  font-size: 12px;
 }
 
 .mediaTileBadges {
@@ -822,15 +862,16 @@ button:hover {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  padding: 1px 6px;
-  font-size: 10px;
-  background: rgba(147, 197, 253, 0.26);
-  color: #1e3a8a;
+  padding: 2px 7px;
+  font-size: 11px;
+  background: rgba(147, 197, 253, 0.45);
+  color: #dbeafe;
+  text-shadow: none;
 }
 
 .mediaTileBadgeBest {
-  background: rgba(192, 132, 252, 0.28);
-  color: #6b21a8;
+  background: rgba(192, 132, 252, 0.5);
+  color: #f3e8ff;
 }
 
 .mediaTileIconButton {

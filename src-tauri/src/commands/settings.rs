@@ -21,6 +21,21 @@ pub struct AiTaskModels {
     pub event_naming: TaskModelSelection,
     pub event_naming_fallback: Option<TaskModelSelection>,
     pub grouping_pass1: Option<TaskModelSelection>,
+    pub image_review: Option<TaskModelSelection>,
+}
+
+#[derive(Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageReviewSettings {
+    pub blur_threshold: f64,
+    pub blur_borderline_pct: f64,
+    pub exposure_dark_pct: f64,
+    pub exposure_bright_pct: f64,
+    pub burst_time_window_secs: i64,
+    pub burst_hash_distance: u32,
+    pub duplicate_hash_distance: u32,
+    pub small_file_min_bytes: i64,
+    pub screenshot_heuristic_threshold: f64,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -127,6 +142,11 @@ pub fn get_app_configuration(state: State<'_, AppState>) -> Result<AppConfigurat
             "ai_model_grouping_pass1_provider",
             "ai_model_grouping_pass1",
         )?,
+        image_review: read_optional_task_model(
+            &conn,
+            "ai_model_image_review_provider",
+            "ai_model_image_review",
+        )?,
     };
     let home_location = read_home_location(&conn)?;
     Ok(AppConfiguration {
@@ -217,7 +237,7 @@ pub async fn set_ai_task_model(
         return Err("Provider must be 'openai' or 'anthropic'.".to_string());
     }
     let (provider_key, model_key) = ai_task_model_setting_keys(task.as_str()).ok_or_else(|| {
-        "Unknown AI task. Expected dateEstimation/dateEstimationFallback/eventNaming/eventNamingFallback/groupingPass1."
+        "Unknown AI task. Expected dateEstimation/dateEstimationFallback/eventNaming/eventNamingFallback/groupingPass1/imageReview."
             .to_string()
     })?;
     let conn = state.open_conn().map_err(|e| e.to_string())?;
@@ -396,22 +416,22 @@ fn ai_task_model_setting_keys(task: &str) -> Option<(&'static str, &'static str)
             "ai_model_event_naming_fallback",
         )),
         "groupingPass1" => Some(("ai_model_grouping_pass1_provider", "ai_model_grouping_pass1")),
+        "imageReview" => Some(("ai_model_image_review_provider", "ai_model_image_review")),
         _ => None,
     }
 }
 
 fn clearable_ai_task_model_setting_keys(task: &str) -> Result<(&'static str, &'static str), String> {
     match task {
-        "dateEstimationFallback" | "eventNamingFallback" | "groupingPass1" => {
+        "dateEstimationFallback" | "eventNamingFallback" | "groupingPass1" | "imageReview" => {
             ai_task_model_setting_keys(task).ok_or_else(|| "Unknown AI task.".to_string())
         }
         "dateEstimation" | "eventNaming" => Err(
-            "Cannot clear required AI task model. Only dateEstimationFallback/eventNamingFallback/groupingPass1 can be cleared."
+            "Cannot clear required AI task model. Only optional models can be cleared."
                 .to_string(),
         ),
         _ => Err(
-            "Unknown AI task. Expected dateEstimationFallback/eventNamingFallback/groupingPass1."
-                .to_string(),
+            "Unknown AI task.".to_string(),
         ),
     }
 }
@@ -468,6 +488,44 @@ fn read_home_location(conn: &rusqlite::Connection) -> Result<Option<HomeLocation
         longitude: lon,
         radius_miles,
     }))
+}
+
+#[tauri::command]
+pub fn get_image_review_settings(state: State<'_, AppState>) -> Result<ImageReviewSettings, String> {
+    let conn = state.open_conn().map_err(|e| e.to_string())?;
+    let s = crate::services::image_review::ReviewSettings::from_db(&conn);
+    Ok(ImageReviewSettings {
+        blur_threshold: s.blur_threshold,
+        blur_borderline_pct: s.blur_borderline_pct,
+        exposure_dark_pct: s.exposure_dark_pct,
+        exposure_bright_pct: s.exposure_bright_pct,
+        burst_time_window_secs: s.burst_time_window_secs,
+        burst_hash_distance: s.burst_hash_distance,
+        duplicate_hash_distance: s.duplicate_hash_distance,
+        small_file_min_bytes: s.small_file_limit_bytes,
+        screenshot_heuristic_threshold: s.screenshot_heuristic_threshold,
+    })
+}
+
+#[tauri::command]
+pub fn set_image_review_settings(settings: ImageReviewSettings, state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.open_conn().map_err(|e| e.to_string())?;
+    let pairs: Vec<(&str, String)> = vec![
+        ("image_blur_threshold", settings.blur_threshold.to_string()),
+        ("image_blur_borderline_pct", settings.blur_borderline_pct.to_string()),
+        ("image_exposure_dark_pct", settings.exposure_dark_pct.to_string()),
+        ("image_exposure_bright_pct", settings.exposure_bright_pct.to_string()),
+        ("burst_time_window_secs", settings.burst_time_window_secs.to_string()),
+        ("burst_hash_distance", settings.burst_hash_distance.to_string()),
+        ("duplicate_hash_distance", settings.duplicate_hash_distance.to_string()),
+        ("small_file_min_bytes", settings.small_file_min_bytes.to_string()),
+        ("screenshot_heuristic_threshold", settings.screenshot_heuristic_threshold.to_string()),
+    ];
+    for (key, value) in pairs {
+        db::set_setting(&conn, key, &value).map_err(|e| e.to_string())?;
+    }
+    db::set_setting(&conn, "last_settings_write_ts", &chrono::Utc::now().to_rfc3339())
+        .map_err(|e| e.to_string())
 }
 
 fn read_optional_task_model(

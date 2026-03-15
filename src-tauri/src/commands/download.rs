@@ -9,13 +9,27 @@ use crate::{
     AppState,
 };
 
+fn emit_index_progress(app_handle: Option<&tauri::AppHandle>, current: usize, total: usize, filename: &str) {
+    runtime_log::emit_pipeline_progress(
+        app_handle,
+        "indexing",
+        &format!("Indexing: {filename}"),
+        current,
+        total,
+    );
+}
+
 #[tauri::command]
-pub fn start_download_session(input: SessionInput, state: State<'_, AppState>) -> Result<i64, String> {
-    tauri::async_runtime::block_on(start_download_session_impl(input, &state))
+pub fn start_download_session(
+    app_handle: tauri::AppHandle,
+    input: SessionInput,
+    state: State<'_, AppState>,
+) -> Result<i64, String> {
+    tauri::async_runtime::block_on(start_download_session_impl(input, &state, Some(&app_handle)))
         .map_err(|e| e.to_string())
 }
 
-pub async fn start_download_session_impl(input: SessionInput, state: &AppState) -> Result<i64> {
+pub async fn start_download_session_impl(input: SessionInput, state: &AppState, app_handle: Option<&tauri::AppHandle>) -> Result<i64> {
     runtime_log::info(
         "download",
         format!(
@@ -59,11 +73,13 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
 
     let staging_dir = state.root_output().join("staging");
     tokio::fs::create_dir_all(&staging_dir).await?;
+    emit_index_progress(app_handle, 0, files.len(), "Starting...");
     for (idx, source_path) in files.iter().enumerate() {
         let filename = source_path
             .file_name()
             .map(|v| v.to_string_lossy().to_string())
             .unwrap_or_else(|| format!("item_{idx}"));
+        emit_index_progress(app_handle, idx + 1, files.len(), &filename);
         let icloud_id = source_path.to_string_lossy().to_string();
         let staged_name = format!("{:05}_{}", idx + 1, filename);
         let staged_path = staging_dir.join(staged_name);
@@ -134,7 +150,7 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState) 
         "UPDATE download_sessions SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?1",
         [session_id],
     )?;
-    image_review::run_image_review_scan(&conn).await?;
+    image_review::run_image_review_scan(&conn, None, None).await?;
     runtime_log::info("download", format!("Session {session_id} indexing complete."));
     Ok(session_id)
 }
@@ -211,7 +227,7 @@ fn exif_to_iso(value: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{exif_to_iso, guess_mime, is_supported_media};
+    use super::{emit_index_progress, exif_to_iso, guess_mime, is_supported_media};
     use std::path::Path;
 
     #[test]
@@ -240,5 +256,11 @@ mod tests {
         assert_eq!(guess_mime(Path::new("foo.heic")), "image/heic");
         assert_eq!(guess_mime(Path::new("foo.mov")), "video/quicktime");
         assert_eq!(guess_mime(Path::new("foo.unknown")), "application/octet-stream");
+    }
+
+    #[test]
+    fn emit_index_progress_with_none_handle_does_not_panic() {
+        emit_index_progress(None, 5, 20, "IMG_0001.JPG");
+        emit_index_progress(None, 0, 0, "");
     }
 }

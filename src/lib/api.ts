@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, ImageReviewItem, VideoReviewItem } from "../types";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, ImageReviewItem, ImageReviewSettings, VideoReviewItem } from "../types";
 
 declare global {
   interface Window {
@@ -38,6 +38,7 @@ export interface AppConfiguration {
     eventNaming: { provider: string; model: string };
     eventNamingFallback: { provider: string; model: string } | null;
     groupingPass1: { provider: string; model: string } | null;
+    imageReview: { provider: string; model: string } | null;
   };
   homeLocation: HomeLocation | null;
 }
@@ -83,12 +84,14 @@ export type AiTaskName =
   | "dateEstimationFallback"
   | "eventNaming"
   | "eventNamingFallback"
-  | "groupingPass1";
+  | "groupingPass1"
+  | "imageReview";
 
 export type OptionalAiTaskName =
   | "dateEstimationFallback"
   | "eventNamingFallback"
-  | "groupingPass1";
+  | "groupingPass1"
+  | "imageReview";
 
 export function setAiTaskModel(
   task: AiTaskName,
@@ -254,4 +257,24 @@ export function excludeMediaItems(mediaItemIds: number[]) {
 
 export function resetSession(deleteGeneratedFiles: boolean) {
   return invokeCommand<ResetSessionResult>("reset_session", { deleteGeneratedFiles });
+}
+
+export function getImageReviewSettings() {
+  return invokeCommand<ImageReviewSettings>("get_image_review_settings");
+}
+
+export function setImageReviewSettings(settings: ImageReviewSettings) {
+  return invokeCommand<void>("set_image_review_settings", { settings });
+}
+
+/**
+ * Returns an asset URL suitable for use as a <video> src.
+ * Uses the Tauri asset:// protocol for native playback (supports seeking).
+ * Falls back to empty string in browser test environments.
+ */
+export function getVideoSrcUrl(filePath: string): string {
+  if (!filePath || window.__MEMORIA_TEST_API__) {
+    return "";
+  }
+  return convertFileSrc(filePath);
 }

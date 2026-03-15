@@ -100,6 +100,15 @@ CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
     ensure_column(&conn, "media_items", "is_burst_primary", "INTEGER DEFAULT 0")?;
     ensure_column(&conn, "media_items", "image_flags", "TEXT")?;
     ensure_column(&conn, "media_items", "sharpness_score", "REAL")?;
+    ensure_column(&conn, "media_items", "blur_score", "REAL")?;
+    ensure_column(&conn, "media_items", "perceptual_hash", "TEXT")?;
+    ensure_column(&conn, "media_items", "duplicate_group_id", "TEXT")?;
+    ensure_column(&conn, "media_items", "exposure_mean", "REAL")?;
+    ensure_column(&conn, "media_items", "exposure_std", "REAL")?;
+    ensure_column(&conn, "media_items", "screenshot_heuristic", "REAL")?;
+    ensure_column(&conn, "media_items", "ai_quality_score", "REAL")?;
+    ensure_column(&conn, "media_items", "ai_quality_reasoning", "TEXT")?;
+    ensure_column(&conn, "media_items", "ai_content_class", "TEXT")?;
     ensure_column(&conn, "event_groups", "ai_event_type", "TEXT")?;
     ensure_column(&conn, "event_groups", "ai_confidence", "TEXT")?;
     ensure_column(&conn, "event_groups", "ai_reasoning", "TEXT")?;
@@ -125,6 +134,14 @@ CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
     cleanup_orphaned_old_tables(&conn)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_media_burst_group_id ON media_items(burst_group_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_perceptual_hash ON media_items(perceptual_hash)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_duplicate_group_id ON media_items(duplicate_group_id)",
         [],
     )?;
     conn.execute(
@@ -347,14 +364,17 @@ pub fn get_image_review_items(conn: &Connection, include_excluded: bool) -> Resu
         "status IN ('indexed', 'image_reviewed')"
     };
     let sql = format!(
-        "SELECT id, filename, COALESCE(current_path, ''), date_taken, COALESCE(mime_type, ''), COALESCE(file_size, 0), sharpness_score, burst_group_id, COALESCE(is_burst_primary, 0), image_flags, status
+        "SELECT id, filename, COALESCE(current_path, ''), date_taken, COALESCE(mime_type, ''),
+                COALESCE(file_size, 0), sharpness_score, blur_score, perceptual_hash,
+                burst_group_id, COALESCE(is_burst_primary, 0), duplicate_group_id,
+                exposure_mean, ai_quality_score, ai_content_class, image_flags, status
          FROM media_items
          WHERE mime_type LIKE 'image/%' AND {status_clause}
          ORDER BY date_taken ASC, id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
-        let flags_raw: Option<String> = row.get(9)?;
+        let flags_raw: Option<String> = row.get(15)?;
         let flags: Vec<String> = flags_raw
             .as_deref()
             .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
@@ -367,10 +387,16 @@ pub fn get_image_review_items(conn: &Connection, include_excluded: bool) -> Resu
             mime_type: row.get(4)?,
             file_size_bytes: row.get(5)?,
             sharpness_score: row.get(6)?,
-            burst_group_id: row.get(7)?,
-            is_burst_primary: row.get::<_, i64>(8)? == 1,
+            blur_score: row.get(7)?,
+            perceptual_hash: row.get(8)?,
+            burst_group_id: row.get(9)?,
+            is_burst_primary: row.get::<_, i64>(10)? == 1,
+            duplicate_group_id: row.get(11)?,
+            exposure_mean: row.get(12)?,
+            ai_quality_score: row.get(13)?,
+            ai_content_class: row.get(14)?,
             image_flags: flags,
-            status: row.get(10)?,
+            status: row.get(16)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

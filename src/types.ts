@@ -58,7 +58,13 @@ export interface VideoReviewItem {
   status: "image_reviewed" | "excluded" | string;
 }
 
-export type ImageFlagReason = "small_file" | "blurry" | "burst_shot";
+export type ImageFlagReason =
+  | "small_file"
+  | "blurry"
+  | "poor_exposure"
+  | "burst_shot"
+  | "duplicate"
+  | "screenshot_or_meme";
 
 export interface ImageReviewItem {
   id: number;
@@ -68,10 +74,28 @@ export interface ImageReviewItem {
   mimeType: string;
   fileSizeBytes: number;
   sharpnessScore: number | null;
+  blurScore: number | null;
+  perceptualHash: string | null;
   burstGroupId: string | null;
   isBurstPrimary: boolean;
+  duplicateGroupId: string | null;
+  exposureMean: number | null;
+  aiQualityScore: number | null;
+  aiContentClass: string | null;
   imageFlags: ImageFlagReason[];
   status: "indexed" | "image_reviewed" | "excluded" | string;
+}
+
+export interface ImageReviewSettings {
+  blurThreshold: number;
+  blurBorderlinePct: number;
+  exposureDarkPct: number;
+  exposureBrightPct: number;
+  burstTimeWindowSecs: number;
+  burstHashDistance: number;
+  duplicateHashDistance: number;
+  smallFileMinBytes: number;
+  screenshotHeuristicThreshold: number;
 }
 
 export interface DateEstimate {

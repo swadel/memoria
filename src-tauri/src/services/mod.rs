@@ -4,6 +4,7 @@ pub mod event_grouper;
 pub mod exiftool;
 pub mod file_organizer;
 pub mod geocoding;
+pub mod image_analysis;
 pub mod image_review;
 pub mod runtime_log;
 pub mod settings;

@@ -49,11 +49,11 @@ pub fn apply_date_approval(media_item_id: i64, date: Option<String>, state: Stat
 }
 
 #[tauri::command]
-pub fn run_date_enforcement(state: State<'_, AppState>) -> Result<(), String> {
+pub fn run_date_enforcement(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     tauri::async_runtime::block_on(async {
         let conn = state.open_conn().map_err(|e| e.to_string())?;
         let ai = state.ai_client().await;
-        date_enforcer::evaluate(&conn, &ai)
+        date_enforcer::evaluate(&conn, &ai, Some(&app_handle))
             .await
             .map_err(|e| e.to_string())
     })
