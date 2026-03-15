@@ -94,6 +94,35 @@ test.describe("Memoria desktop UI", () => {
     await expect(page.getByTestId("status-pill")).toContainText("Skipped date approval");
   });
 
+  test("date approval can proceed to event grouping without FK failure", async () => {
+    harness.seedFixture("regression-mixed");
+    const page = await harness.launch();
+    await page.getByTestId("tab-images").click();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("image-done-proceed").click();
+
+    await page.getByTestId("tab-videos").click();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("video-done-proceed").click();
+
+    await page.getByTestId("tab-dates").click();
+    await expect(page.getByTestId("date-approval-card")).toBeVisible();
+    while (true) {
+      const enabledSkipButton = page.locator("[data-testid^='date-skip-']:not([disabled])").first();
+      if ((await enabledSkipButton.count()) === 0) {
+        break;
+      }
+      await enabledSkipButton.click();
+      await page.waitForTimeout(100);
+    }
+    await expect(page.locator("[data-testid^='date-item-']")).toHaveCount(0);
+
+    await page.getByTestId("date-done-proceed-events").click();
+    await expect(page.getByTestId("status-pill")).toContainText("Event grouping complete.");
+    await expect(page.getByTestId("status-pill")).not.toContainText("Grouping failed");
+    await expect(page.getByTestId("event-groups-card")).toBeVisible();
+  });
+
   test("resets session and optionally deletes generated output directories", async () => {
     const page = await harness.launch();
     await page.getByTestId("tab-dashboard").click();

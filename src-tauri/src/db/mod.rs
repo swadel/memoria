@@ -111,6 +111,15 @@ CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
     ensure_column(&conn, "event_groups", "ai_fallback_model", "TEXT")?;
     ensure_column(&conn, "event_groups", "ai_pass1_result", "TEXT")?;
     ensure_column(&conn, "event_groups", "ai_pass1_model", "TEXT")?;
+    ensure_column(&conn, "event_groups", "ai_cluster_location_facts", "TEXT")?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS geocode_cache (
+            coord_key TEXT PRIMARY KEY,
+            city      TEXT,
+            country   TEXT,
+            cached_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );"
+    )?;
     ensure_media_items_status_migration(&conn)?;
     ensure_audit_log_references_media_items(&conn)?;
     cleanup_orphaned_old_tables(&conn)?;

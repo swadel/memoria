@@ -302,8 +302,12 @@ function buildState(profile: BrowserFixtureProfile) {
       outputDirectory: "C:\\fixture\\output",
       aiTaskModels: {
         dateEstimation: { provider: "anthropic", model: "claude-sonnet-4-6" },
-        eventNaming: { provider: "anthropic", model: "claude-sonnet-4-6" }
-      }
+        dateEstimationFallback: null,
+        eventNaming: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        eventNamingFallback: null,
+        groupingPass1: null
+      },
+      homeLocation: null as { addressRaw: string; label: string | null; latitude: number; longitude: number; radiusMiles: number } | null
     },
     stats,
     dateItems,
@@ -394,6 +398,22 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "set_output_directory":
               state.config.outputDirectory = String(args?.path ?? state.config.outputDirectory);
               return Promise.resolve();
+            case "set_home_location": {
+              const address = String(args?.address ?? "").trim();
+              if (!address) return Promise.reject(new Error("Home address cannot be empty."));
+              const result = {
+                addressRaw: address,
+                label: args?.label ? String(args.label) : null,
+                latitude: 36.16,
+                longitude: -86.78,
+                radiusMiles: Number(args?.radiusMiles ?? args?.radius_miles ?? 25)
+              };
+              state.config.homeLocation = result;
+              return Promise.resolve(result);
+            }
+            case "clear_home_location":
+              state.config.homeLocation = null;
+              return Promise.resolve();
             case "start_download_session":
               if (state.ingestBehavior === "slow") {
                 return new Promise((resolve) =>
@@ -411,7 +431,40 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
             case "set_openai_key":
             case "set_anthropic_key":
             case "set_ai_task_model":
+            case "clear_ai_task_model":
             case "run_event_grouping":
+              if (command === "set_ai_task_model") {
+                const task = String(args?.task ?? "");
+                const provider = String(args?.provider ?? "");
+                const model = String(args?.model ?? "");
+                const next = { provider, model };
+                if (task === "dateEstimation") state.config.aiTaskModels.dateEstimation = next;
+                if (task === "dateEstimationFallback") state.config.aiTaskModels.dateEstimationFallback = next;
+                if (task === "eventNaming") state.config.aiTaskModels.eventNaming = next;
+                if (task === "eventNamingFallback") state.config.aiTaskModels.eventNamingFallback = next;
+                if (task === "groupingPass1") state.config.aiTaskModels.groupingPass1 = next;
+              }
+              if (command === "clear_ai_task_model") {
+                const task = String(args?.task ?? "");
+                if (task === "dateEstimationFallback") {
+                  if (!state.config.aiTaskModels.dateEstimationFallback) {
+                    return Promise.reject(new Error("dateEstimationFallback is not configured"));
+                  }
+                  state.config.aiTaskModels.dateEstimationFallback = null;
+                }
+                if (task === "eventNamingFallback") {
+                  if (!state.config.aiTaskModels.eventNamingFallback) {
+                    return Promise.reject(new Error("eventNamingFallback is not configured"));
+                  }
+                  state.config.aiTaskModels.eventNamingFallback = null;
+                }
+                if (task === "groupingPass1") {
+                  if (!state.config.aiTaskModels.groupingPass1) {
+                    return Promise.reject(new Error("groupingPass1 is not configured"));
+                  }
+                  state.config.aiTaskModels.groupingPass1 = null;
+                }
+              }
               if (fixtureProfile === "grouping-empty" && state.eventGroups.length === 0) {
                 state.eventGroups = [
                   {

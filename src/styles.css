@@ -529,6 +529,39 @@ button:hover {
   background: transparent;
 }
 
+.settingsSubgroupTitle {
+  margin: 2px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #4b5563;
+}
+
+.settingsModelUnconfigured {
+  color: #6b7280;
+}
+
+.settingsModelClearBtn {
+  border-color: rgba(148, 163, 184, 0.7);
+}
+
+.settingsModelOptionalTag {
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.settingsHomeLocationStatus {
+  font-size: 12px;
+  color: #6b7280;
+  padding: 6px 0 0;
+  min-height: 20px;
+}
+
+.settingsDescription {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 0 0 8px;
+}
+
 .responsiveInput {
   width: min(100%, 520px);
 }

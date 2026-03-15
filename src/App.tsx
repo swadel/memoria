@@ -11,6 +11,7 @@ import { WorkflowStepper, type WorkflowStepState } from "./components/WorkflowSt
 import logoImage from "./assets/logo.png";
 import {
   applyDateApproval,
+  clearAiTaskModel,
   completeImageReviewAndStartVideoReview,
   completeVideoReviewAndRunGrouping,
   createEventGroup,
@@ -41,12 +42,15 @@ import {
   keepAllBurst,
   keepBestOnly,
   setAiTaskModel,
+  clearHomeLocation,
   setAnthropicKey,
+  setHomeLocation,
   setOpenAiKey,
   setOutputDirectory,
   setWorkingDirectory,
   startDownloadSession,
   resetSession,
+  type OptionalAiTaskName,
   type ToolHealth
 } from "./lib/api";
 import {
@@ -66,6 +70,14 @@ import type { DashboardStats, DateEstimate, EventGroup, EventGroupItem, ImageRev
 type Tab = "dashboard" | "images" | "videos" | "dates" | "events" | "settings";
 type PipelineStage = "index" | "image" | "video" | "date" | "group" | "finalize";
 type PipelineStageState = "idle" | "running" | "completed" | "failed";
+type AiModelSelection = { provider: string; model: string };
+type AiModelsState = {
+  dateEstimation: AiModelSelection;
+  dateEstimationFallback: AiModelSelection | null;
+  eventNaming: AiModelSelection;
+  eventNamingFallback: AiModelSelection | null;
+  groupingPass1: AiModelSelection | null;
+};
 
 const DEFAULT_STATS: DashboardStats = {
   total: 0,
@@ -163,10 +175,12 @@ export function App() {
   const [outputDirectory, setOutputDirectoryState] = useState("C:\\Memoria");
   const [openAiKey, setOpenAiKey] = useState("");
   const [anthropicKey, setAnthropicKeyState] = useState("");
-  const [aiModels, setAiModels] = useState({
-    dateEstimation: { provider: "anthropic", model: "claude-sonnet-4-6" },
-    eventNaming: { provider: "anthropic", model: "claude-sonnet-4-6" }
-  });
+  const [aiModels, setAiModels] = useState<AiModelsState>(createDefaultAiModels);
+  const savedAiModelsRef = useRef<AiModelsState>(createDefaultAiModels());
+  const [homeAddressInput, setHomeAddressInput] = useState("");
+  const [homeLabelInput, setHomeLabelInput] = useState("");
+  const [homeRadiusInput, setHomeRadiusInput] = useState("25");
+  const [homeLocationStatus, setHomeLocationStatus] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [showFinalizeToast, setShowFinalizeToast] = useState(false);
   const [completionToastTotal, setCompletionToastTotal] = useState<number | null>(null);
@@ -229,7 +243,19 @@ export function App() {
           const cfg = await getAppConfiguration();
           setWorkingDirectoryState(cfg.workingDirectory);
           setOutputDirectoryState(cfg.outputDirectory);
-          setAiModels(cfg.aiTaskModels);
+          const loadedAiModels = normalizeAiTaskModels(
+            (cfg as { aiTaskModels?: Partial<AiModelsState> }).aiTaskModels
+          );
+          setAiModels(loadedAiModels);
+          savedAiModelsRef.current = loadedAiModels;
+          if (cfg.homeLocation) {
+            setHomeAddressInput(cfg.homeLocation.addressRaw);
+            setHomeLabelInput(cfg.homeLocation.label ?? "");
+            setHomeRadiusInput(String(cfg.homeLocation.radiusMiles));
+            setHomeLocationStatus(
+              `Saved: ${cfg.homeLocation.addressRaw} (${cfg.homeLocation.latitude.toFixed(2)}, ${cfg.homeLocation.longitude.toFixed(2)})`
+            );
+          }
         } catch {
           // keep defaults
         }
@@ -1210,6 +1236,106 @@ export function App() {
             </div>
           </section>
 
+          <section className="settingsSectionCard" data-testid="settings-section-home-location">
+            <h4 className="settingsSectionTitle">Home Location</h4>
+            <p className="settingsDescription">
+              Setting a home location improves grouping by distinguishing local events from travel/vacation clusters.
+            </p>
+            <div className="settingsFormGrid">
+              <div className="settingsField">
+                <label htmlFor="home-address-input" className="fieldLabel settingsFieldLabel">Home Address / Area</label>
+                <input
+                  id="home-address-input"
+                  data-testid="home-address-input"
+                  className="settingsInput"
+                  placeholder="Nashville, TN"
+                  value={homeAddressInput}
+                  onChange={(e) => setHomeAddressInput(e.target.value)}
+                />
+              </div>
+              <div className="settingsField">
+                <label htmlFor="home-label-input" className="fieldLabel settingsFieldLabel">Home Label (optional)</label>
+                <input
+                  id="home-label-input"
+                  data-testid="home-label-input"
+                  className="settingsInput"
+                  placeholder="Home"
+                  value={homeLabelInput}
+                  onChange={(e) => setHomeLabelInput(e.target.value)}
+                />
+              </div>
+              <div className="settingsField">
+                <label htmlFor="home-radius-input" className="fieldLabel settingsFieldLabel">Home Radius (miles)</label>
+                <input
+                  id="home-radius-input"
+                  data-testid="home-radius-input"
+                  className="settingsInput"
+                  type="number"
+                  min="1"
+                  placeholder="25"
+                  value={homeRadiusInput}
+                  onChange={(e) => setHomeRadiusInput(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="settingsActionRow">
+              <MotionPrimaryButton
+                data-testid="home-location-save-btn"
+                className="primaryBtn"
+                disabled={busyAction !== null}
+                onClick={async () => {
+                  if (!homeAddressInput.trim()) {
+                    setHomeLocationStatus("Please enter an address or area.");
+                    return;
+                  }
+                  setBusyAction("save-home-location");
+                  try {
+                    const result = await setHomeLocation(
+                      homeAddressInput.trim(),
+                      homeLabelInput.trim() || undefined,
+                      homeRadiusInput ? Number(homeRadiusInput) : undefined
+                    );
+                    setHomeLocationStatus(
+                      `Saved: ${result.addressRaw} (${result.latitude.toFixed(2)}, ${result.longitude.toFixed(2)})`
+                    );
+                    setMessage("Home location saved.");
+                  } catch (err) {
+                    setHomeLocationStatus(String(err));
+                  } finally {
+                    setBusyAction(null);
+                  }
+                }}
+              >
+                {busyAction === "save-home-location" ? "Saving..." : "Save Home Location"}
+              </MotionPrimaryButton>
+              <button
+                data-testid="home-location-clear-btn"
+                className="secondaryBtn settingsModelClearBtn"
+                disabled={busyAction !== null}
+                onClick={async () => {
+                  setBusyAction("clear-home-location");
+                  try {
+                    await clearHomeLocation();
+                    setHomeAddressInput("");
+                    setHomeLabelInput("");
+                    setHomeRadiusInput("25");
+                    setHomeLocationStatus("Not configured");
+                    setMessage("Home location cleared.");
+                  } catch (err) {
+                    setHomeLocationStatus(`Clear failed: ${String(err)}`);
+                  } finally {
+                    setBusyAction(null);
+                  }
+                }}
+              >
+                Clear
+              </button>
+            </div>
+            <div className="settingsHomeLocationStatus" data-testid="home-location-status">
+              {homeLocationStatus || "Not configured — grouping will work without home/away detection"}
+            </div>
+          </section>
+
           <section className="settingsSectionCard" data-testid="settings-section-api-keys">
             <h4 className="settingsSectionTitle">API Keys</h4>
             <div className="settingsFormGrid">
@@ -1279,34 +1405,97 @@ export function App() {
           <section className="settingsSectionCard" data-testid="settings-section-ai-models">
             <h4 className="settingsSectionTitle">AI Task Models</h4>
             <div className="settingsFormGrid">
+              <h5 className="settingsSubgroupTitle">Date Estimation</h5>
               <ModelSelector
-                label="Date Estimation"
+                label="Date Estimation — Primary Model"
                 testPrefix="date-estimation"
                 value={aiModels.dateEstimation}
                 onChange={(next) => setAiModels((prev) => ({ ...prev, dateEstimation: next }))}
               />
               <ModelSelector
-                label="Event Naming"
+                label="Date Estimation — Fallback Model"
+                testPrefix="date-estimation-fallback"
+                value={aiModels.dateEstimationFallback}
+                optional
+                onChange={(next) => setAiModels((prev) => ({ ...prev, dateEstimationFallback: next }))}
+                onClear={() => setAiModels((prev) => ({ ...prev, dateEstimationFallback: null }))}
+              />
+              <h5 className="settingsSubgroupTitle">Event Grouping</h5>
+              <ModelSelector
+                label="Grouping Pass 1 — Cluster Analysis Model"
+                testPrefix="grouping-pass1"
+                value={aiModels.groupingPass1}
+                optional
+                onChange={(next) => setAiModels((prev) => ({ ...prev, groupingPass1: next }))}
+                onClear={() => setAiModels((prev) => ({ ...prev, groupingPass1: null }))}
+              />
+              <ModelSelector
+                label="Grouping Pass 2 — Event Naming Model"
                 testPrefix="event-naming"
                 value={aiModels.eventNaming}
                 onChange={(next) => setAiModels((prev) => ({ ...prev, eventNaming: next }))}
+              />
+              <ModelSelector
+                label="Event Naming — Fallback Model"
+                testPrefix="event-naming-fallback"
+                value={aiModels.eventNamingFallback}
+                optional
+                onChange={(next) => setAiModels((prev) => ({ ...prev, eventNamingFallback: next }))}
+                onClear={() => setAiModels((prev) => ({ ...prev, eventNamingFallback: null }))}
               />
             </div>
             <div className="settingsActionRow">
               <button
                 data-testid="settings-save-ai-models"
                 className="secondaryBtn"
+                disabled={busyAction !== null}
                 onClick={async () => {
+                  setBusyAction("save-ai-models");
                   try {
                     await setAiTaskModel("dateEstimation", aiModels.dateEstimation.provider as "openai" | "anthropic", aiModels.dateEstimation.model);
                     await setAiTaskModel("eventNaming", aiModels.eventNaming.provider as "openai" | "anthropic", aiModels.eventNaming.model);
+                    const optionalSlots: Array<{
+                      task: OptionalAiTaskName;
+                      current: AiModelSelection | null;
+                      previous: AiModelSelection | null;
+                    }> = [
+                      {
+                        task: "dateEstimationFallback",
+                        current: aiModels.dateEstimationFallback,
+                        previous: savedAiModelsRef.current.dateEstimationFallback
+                      },
+                      {
+                        task: "groupingPass1",
+                        current: aiModels.groupingPass1,
+                        previous: savedAiModelsRef.current.groupingPass1
+                      },
+                      {
+                        task: "eventNamingFallback",
+                        current: aiModels.eventNamingFallback,
+                        previous: savedAiModelsRef.current.eventNamingFallback
+                      }
+                    ];
+                    for (const slot of optionalSlots) {
+                      if (slot.current) {
+                        await setAiTaskModel(
+                          slot.task,
+                          slot.current.provider as "openai" | "anthropic",
+                          slot.current.model
+                        );
+                      } else if (slot.previous) {
+                        await clearAiTaskModel(slot.task);
+                      }
+                    }
+                    savedAiModelsRef.current = normalizeAiTaskModels(aiModels);
                     setMessage("AI task models saved.");
                   } catch (err) {
                     setMessage(`Saving AI models failed: ${String(err)}`);
+                  } finally {
+                    setBusyAction(null);
                   }
                 }}
               >
-                Save AI Models
+                {busyAction === "save-ai-models" ? "Saving..." : "Save AI Models"}
               </button>
             </div>
           </section>
@@ -3062,28 +3251,82 @@ function normalizeName(value: string): string {
   return value.trim().toLocaleLowerCase();
 }
 
+function createDefaultAiModels(): AiModelsState {
+  return {
+    dateEstimation: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    dateEstimationFallback: null,
+    eventNaming: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    eventNamingFallback: null,
+    groupingPass1: null
+  };
+}
+
+function cloneAiModelSelection(value: AiModelSelection): AiModelSelection {
+  return { provider: value.provider, model: value.model };
+}
+
+function normalizeAiModelSelection(value: unknown): AiModelSelection | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const provider = (value as { provider?: unknown }).provider;
+  const model = (value as { model?: unknown }).model;
+  if (typeof provider !== "string" || typeof model !== "string") {
+    return null;
+  }
+  const providerTrimmed = provider.trim();
+  const modelTrimmed = model.trim();
+  if (!providerTrimmed || !modelTrimmed) {
+    return null;
+  }
+  return { provider: providerTrimmed, model: modelTrimmed };
+}
+
+function normalizeAiTaskModels(raw: Partial<AiModelsState> | AiModelsState | undefined): AiModelsState {
+  const fallback = createDefaultAiModels();
+  const dateEstimation = normalizeAiModelSelection(raw?.dateEstimation) ?? cloneAiModelSelection(fallback.dateEstimation);
+  const eventNaming = normalizeAiModelSelection(raw?.eventNaming) ?? cloneAiModelSelection(fallback.eventNaming);
+  return {
+    dateEstimation,
+    dateEstimationFallback: normalizeAiModelSelection(raw?.dateEstimationFallback),
+    eventNaming,
+    eventNamingFallback: normalizeAiModelSelection(raw?.eventNamingFallback),
+    groupingPass1: normalizeAiModelSelection(raw?.groupingPass1)
+  };
+}
+
 function ModelSelector({
   label,
   testPrefix,
   value,
-  onChange
+  onChange,
+  optional = false,
+  onClear
 }: {
   label: string;
   testPrefix: string;
-  value: { provider: string; model: string };
-  onChange: (value: { provider: string; model: string }) => void;
+  value: AiModelSelection | null;
+  onChange: (value: AiModelSelection) => void;
+  optional?: boolean;
+  onClear?: () => void;
 }) {
   const providerId = `${testPrefix}-provider`;
   const modelId = `${testPrefix}-model`;
+  const isUnconfigured = optional && value === null;
+  const activeValue = value ?? { provider: "anthropic", model: "" };
   return (
     <div className="settingsField settingsModelCard" data-testid={`model-selector-${testPrefix}`}>
-      <label className="fieldLabel settingsFieldLabel" htmlFor={providerId}>{label}</label>
+      <label className="fieldLabel settingsFieldLabel" htmlFor={providerId}>
+        {label}
+        {optional ? <span className="settingsModelOptionalTag"> (Optional)</span> : null}
+      </label>
       <select
         id={providerId}
         data-testid={`model-provider-${testPrefix}`}
         className="settingsInput"
-        value={value.provider}
-        onChange={(e) => onChange({ ...value, provider: e.target.value })}
+        value={activeValue.provider}
+        disabled={isUnconfigured}
+        onChange={(e) => onChange({ ...activeValue, provider: e.target.value })}
       >
         <option value="openai">OpenAI</option>
         <option value="anthropic">Anthropic</option>
@@ -3091,11 +3334,31 @@ function ModelSelector({
       <input
         id={modelId}
         data-testid={`model-name-${testPrefix}`}
-        className="settingsInput"
-        value={value.model}
-        onChange={(e) => onChange({ ...value, model: e.target.value })}
-        placeholder="Model name"
+        className={`settingsInput${isUnconfigured ? " settingsModelUnconfigured" : ""}`}
+        value={activeValue.model}
+        disabled={isUnconfigured}
+        onChange={(e) => onChange({ ...activeValue, model: e.target.value })}
+        placeholder={isUnconfigured ? "Not configured" : "Model name"}
       />
+      {isUnconfigured ? (
+        <button
+          type="button"
+          data-testid={`model-configure-${testPrefix}`}
+          className="secondaryBtn settingsInlineAction"
+          onClick={() => onChange({ provider: "anthropic", model: "" })}
+        >
+          Configure
+        </button>
+      ) : optional ? (
+        <button
+          type="button"
+          data-testid={`model-clear-${testPrefix}`}
+          className="secondaryBtn settingsInlineAction settingsModelClearBtn"
+          onClick={() => onClear?.()}
+        >
+          Clear
+        </button>
+      ) : null}
     </div>
   );
 }

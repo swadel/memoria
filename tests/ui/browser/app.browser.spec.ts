@@ -136,6 +136,72 @@ test.describe("Memoria browser UI", () => {
     await videoOnlyPage.close();
   });
 
+  test("settings renders all model slots with locked labels", async ({ page }) => {
+    await page.getByTestId("tab-settings").click();
+
+    await expect(page.getByText("Date Estimation — Primary Model")).toBeVisible();
+    await expect(page.getByText("Date Estimation — Fallback Model")).toBeVisible();
+    await expect(page.getByText("Grouping Pass 1 — Cluster Analysis Model")).toBeVisible();
+    await expect(page.getByText("Grouping Pass 2 — Event Naming Model")).toBeVisible();
+    await expect(page.getByText("Event Naming — Fallback Model")).toBeVisible();
+
+    await expect(page.getByTestId("model-selector-date-estimation")).toBeVisible();
+    await expect(page.getByTestId("model-selector-date-estimation-fallback")).toBeVisible();
+    await expect(page.getByTestId("model-selector-grouping-pass1")).toBeVisible();
+    await expect(page.getByTestId("model-selector-event-naming")).toBeVisible();
+    await expect(page.getByTestId("model-selector-event-naming-fallback")).toBeVisible();
+
+    await expect(page.getByTestId("model-configure-date-estimation-fallback")).toBeVisible();
+    await expect(page.getByTestId("model-configure-grouping-pass1")).toBeVisible();
+    await expect(page.getByTestId("model-configure-event-naming-fallback")).toBeVisible();
+  });
+
+  test("settings save does not clear never-configured optional models", async ({ page }) => {
+    await page.getByTestId("tab-settings").click();
+    await page.getByTestId("settings-save-ai-models").click();
+    await expect(page.getByTestId("status-pill")).toContainText("AI task models saved.");
+  });
+
+  test("settings optional model configure and clear flow", async ({ page }) => {
+    await page.getByTestId("tab-settings").click();
+
+    await page.getByTestId("model-configure-date-estimation-fallback").click();
+    await page.getByTestId("model-provider-date-estimation-fallback").selectOption("openai");
+    await page.getByTestId("model-name-date-estimation-fallback").fill("gpt-4o-mini");
+    await page.getByTestId("settings-save-ai-models").click();
+    await expect(page.getByTestId("status-pill")).toContainText("AI task models saved.");
+    await expect(page.getByTestId("model-name-date-estimation-fallback")).toHaveValue("gpt-4o-mini");
+
+    await page.getByTestId("model-clear-date-estimation-fallback").click();
+    await page.getByTestId("settings-save-ai-models").click();
+    await expect(page.getByTestId("status-pill")).toContainText("AI task models saved.");
+    await expect(page.getByTestId("model-configure-date-estimation-fallback")).toBeVisible();
+  });
+
+  test("settings backward compatibility with only original primary models configured", async ({ context }) => {
+    const compatibilityPage = await context.newPage();
+    const consoleErrors: string[] = [];
+    compatibilityPage.on("console", (msg) => {
+      if (msg.type() === "error") {
+        consoleErrors.push(msg.text());
+      }
+    });
+    await installBrowserApiMock(compatibilityPage, "settings-only");
+    await compatibilityPage.goto("/");
+    await compatibilityPage.getByTestId("tab-settings").click();
+
+    await expect(compatibilityPage.getByTestId("model-name-date-estimation")).toHaveValue("claude-sonnet-4-6");
+    await expect(compatibilityPage.getByTestId("model-name-event-naming")).toHaveValue("claude-sonnet-4-6");
+    await expect(compatibilityPage.getByTestId("model-configure-date-estimation-fallback")).toBeVisible();
+    await expect(compatibilityPage.getByTestId("model-configure-grouping-pass1")).toBeVisible();
+    await expect(compatibilityPage.getByTestId("model-configure-event-naming-fallback")).toBeVisible();
+
+    await compatibilityPage.getByTestId("settings-save-ai-models").click();
+    await expect(compatibilityPage.getByTestId("status-pill")).toContainText("AI task models saved.");
+    expect(consoleErrors).toEqual([]);
+    await compatibilityPage.close();
+  });
+
   test("image review supports flagged and burst workflows", async ({ page }) => {
     await page.getByTestId("tab-images").click();
     await expect(page.getByTestId("image-review-view")).toBeVisible();
@@ -347,5 +413,29 @@ test.describe("Memoria browser UI", () => {
     await page.getByTestId("reset-session-cancel").click();
     await expect(page.getByTestId("reset-session-dialog")).toHaveCount(0);
     await expect(page.getByTestId("dashboard-progress-copy")).toContainText("of 8 items.");
+  });
+
+  test("home location section renders with correct testids and default state", async ({ page }) => {
+    await page.getByTestId("tab-settings").click();
+    await expect(page.getByTestId("settings-section-home-location")).toBeVisible();
+    await expect(page.getByTestId("home-address-input")).toBeVisible();
+    await expect(page.getByTestId("home-label-input")).toBeVisible();
+    await expect(page.getByTestId("home-radius-input")).toBeVisible();
+    await expect(page.getByTestId("home-location-save-btn")).toBeVisible();
+    await expect(page.getByTestId("home-location-clear-btn")).toBeVisible();
+    await expect(page.getByTestId("home-location-status")).toContainText("Not configured");
+  });
+
+  test("home location save and clear flow", async ({ page }) => {
+    await page.getByTestId("tab-settings").click();
+    await page.getByTestId("home-address-input").fill("Nashville, TN");
+    await page.getByTestId("home-label-input").fill("Home");
+    await page.getByTestId("home-location-save-btn").click();
+    await expect(page.getByTestId("home-location-status")).toContainText("Saved: Nashville, TN");
+    await expect(page.getByTestId("status-pill")).toContainText("Home location saved.");
+
+    await page.getByTestId("home-location-clear-btn").click();
+    await expect(page.getByTestId("home-location-status")).toContainText("Not configured");
+    await expect(page.getByTestId("status-pill")).toContainText("Home location cleared.");
   });
 });

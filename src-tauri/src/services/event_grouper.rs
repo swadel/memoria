@@ -3,24 +3,24 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime};
 use reqwest::Client;
 use rusqlite::{params, Connection};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::Path;
-use tokio::time::{Duration, Instant};
+
+use std::collections::HashSet;
 
 use super::{
     ai_client::{
-        AiClient, ClusterMetadata, EventNameSuggestion, EventNamingRequest, CLUSTER_METADATA_PROMPT_VERSION,
-        EVENT_NAMING_PROMPT_VERSION,
+        AiClient, ClusterLocationFacts, ClusterMetadata, EventNameSuggestion, EventNamingRequest,
+        CLUSTER_METADATA_PROMPT_VERSION, EVENT_NAMING_PROMPT_VERSION,
     },
-    exiftool, runtime_log,
+    exiftool,
+    geocoding::{self, location_hint_from_geocode_result, ReverseGeocoder},
+    runtime_log,
 };
 
 const CLUSTER_GAP_DAYS: i64 = 2;
 const CLUSTER_SPAN_SPLIT_DAYS: i64 = 14;
 const PASS1_MIN_CLUSTER_SIZE: usize = 5;
-const NOMINATIM_REVERSE_URL: &str = "https://nominatim.openstreetmap.org/reverse";
-const NOMINATIM_USER_AGENT: &str = "Memoria/1.0 (photo organizer app)";
-const NOMINATIM_MIN_REQUEST_INTERVAL_MS: u64 = 1100;
 
 #[derive(Debug, Clone)]
 struct ClusterItem {
@@ -34,6 +34,189 @@ struct ClusterItem {
 struct ClusterNamingOutcome {
     suggestion: EventNameSuggestion,
     pass1: Option<ClusterMetadata>,
+    location_facts: Option<ClusterLocationFacts>,
+}
+
+#[derive(Debug, Clone)]
+struct HomeLocationConfig {
+    latitude: f64,
+    longitude: f64,
+    radius_miles: f64,
+    label: Option<String>,
+}
+
+fn read_home_location_config(conn: &Connection) -> Option<HomeLocationConfig> {
+    let lat = crate::db::get_setting(conn, "home_latitude")
+        .ok()?
+        .and_then(|v| v.parse::<f64>().ok())?;
+    let lon = crate::db::get_setting(conn, "home_longitude")
+        .ok()?
+        .and_then(|v| v.parse::<f64>().ok())?;
+    let radius = crate::db::get_setting(conn, "home_radius_miles")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(25.0);
+    let label = crate::db::get_setting(conn, "home_label")
+        .ok()
+        .flatten()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            crate::db::get_setting(conn, "home_address_raw")
+                .ok()
+                .flatten()
+                .filter(|v| !v.trim().is_empty())
+        });
+    Some(HomeLocationConfig {
+        latitude: lat,
+        longitude: lon,
+        radius_miles: radius,
+        label,
+    })
+}
+
+async fn compute_cluster_location_facts(
+    cluster: &[ClusterItem],
+    http: &Client,
+    geocoder: &mut ReverseGeocoder,
+    conn: &Connection,
+    home: Option<&HomeLocationConfig>,
+) -> Result<ClusterLocationFacts> {
+    let mut gps_coords: Vec<(f64, f64)> = Vec::new();
+    for item in cluster {
+        let path = Path::new(item.current_path.as_str());
+        if let Ok(Some((lat, lon))) = exiftool::read_gps_coordinates(path).await {
+            gps_coords.push((lat, lon));
+        }
+    }
+
+    let gps_coverage_percent = if cluster.is_empty() {
+        0.0
+    } else {
+        (gps_coords.len() as f64 / cluster.len() as f64) * 100.0
+    };
+
+    if gps_coords.is_empty() {
+        let duration = cluster_duration_and_distinct_days(cluster);
+        return Ok(ClusterLocationFacts {
+            gps_coverage_percent: 0.0,
+            dominant_location: None,
+            dominant_place_confidence: None,
+            median_distance_from_home_miles: None,
+            away_from_home: None,
+            location_consistency: "none".to_string(),
+            cluster_duration_days: duration.0,
+            distinct_days_count: duration.1,
+            maybe_travel_cluster: false,
+            home_area_label: home.and_then(|h| h.label.clone()),
+        });
+    }
+
+    // Reverse geocode a sample of up to 5 GPS-bearing items
+    let sample_indices = evenly_distributed_indices(gps_coords.len(), 5);
+    let mut city_counts: Vec<(String, usize)> = Vec::new();
+    let mut geocoded_count = 0_usize;
+    for &idx in &sample_indices {
+        let (lat, lon) = gps_coords[idx];
+        if let Ok(Some((city, _country))) = geocoder.reverse_geocode(http, Some(conn), lat, lon).await {
+            geocoded_count += 1;
+            if let Some(entry) = city_counts.iter_mut().find(|(c, _)| c.eq_ignore_ascii_case(&city)) {
+                entry.1 += 1;
+            } else {
+                city_counts.push((city, 1));
+            }
+        }
+    }
+
+    city_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    let dominant_location = city_counts.first().map(|(c, _)| c.clone());
+    let dominant_count = city_counts.first().map(|(_, n)| *n).unwrap_or(0);
+
+    let dominant_place_confidence = if geocoded_count == 0 {
+        None
+    } else {
+        let ratio = dominant_count as f64 / geocoded_count as f64;
+        Some(if ratio > 0.7 { "high" } else if ratio > 0.4 { "medium" } else { "low" }.to_string())
+    };
+
+    let location_consistency = if geocoded_count == 0 {
+        "none".to_string()
+    } else if city_counts.len() == 1 {
+        "consistent".to_string()
+    } else {
+        "mixed".to_string()
+    };
+
+    // Home distance computation
+    let (median_distance, away_from_home) = if let Some(h) = home {
+        let mut distances: Vec<f64> = gps_coords
+            .iter()
+            .map(|(lat, lon)| geocoding::haversine_distance_miles(h.latitude, h.longitude, *lat, *lon))
+            .collect();
+        distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = distances[distances.len() / 2];
+        let outside_count = distances.iter().filter(|d| **d > h.radius_miles).count();
+        let pct_outside = outside_count as f64 / distances.len() as f64;
+
+        // Composite heuristic
+        let mut away = median > h.radius_miles && pct_outside >= 0.6;
+
+        // Confidence boost: high dominant_place_confidence + different city from home
+        if !away {
+            if let (Some(ref dpc), Some(ref dom_loc), Some(ref home_lbl)) =
+                (&dominant_place_confidence, &dominant_location, &h.label)
+            {
+                if dpc == "high" && !dom_loc.eq_ignore_ascii_case(home_lbl) {
+                    away = true;
+                }
+            }
+        }
+
+        (Some(median), Some(away))
+    } else {
+        (None, None)
+    };
+
+    let duration = cluster_duration_and_distinct_days(cluster);
+    let maybe_travel = away_from_home == Some(true)
+        && duration.0 >= 2
+        && location_consistency != "none";
+
+    Ok(ClusterLocationFacts {
+        gps_coverage_percent,
+        dominant_location,
+        dominant_place_confidence,
+        median_distance_from_home_miles: median_distance,
+        away_from_home,
+        location_consistency,
+        cluster_duration_days: duration.0,
+        distinct_days_count: duration.1,
+        maybe_travel_cluster: maybe_travel,
+        home_area_label: home.and_then(|h| h.label.clone()),
+    })
+}
+
+fn cluster_duration_and_distinct_days(cluster: &[ClusterItem]) -> (i64, usize) {
+    if cluster.is_empty() {
+        return (0, 0);
+    }
+    let start = cluster.first().unwrap().capture_at.date();
+    let end = cluster.last().unwrap().capture_at.date();
+    let duration = (end - start).num_days() + 1;
+    let distinct: HashSet<NaiveDate> = cluster.iter().map(|x| x.capture_at.date()).collect();
+    (duration, distinct.len())
+}
+
+fn evenly_distributed_indices(total: usize, target: usize) -> Vec<usize> {
+    if total == 0 {
+        return vec![];
+    }
+    let n = target.min(total);
+    if n >= total {
+        return (0..total).collect();
+    }
+    let step = (total - 1) as f64 / (n - 1).max(1) as f64;
+    (0..n).map(|i| (i as f64 * step).round() as usize).collect()
 }
 
 pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
@@ -48,8 +231,10 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
         "event_grouper",
         format!("Using grouping threshold days = {cluster_gap_days}."),
     );
+    // Clear existing group links first to avoid FK violations when stale grouped/filed
+    // rows still reference prior event_groups from earlier runs.
+    conn.execute("UPDATE media_items SET event_group_id=NULL WHERE event_group_id IS NOT NULL", [])?;
     conn.execute("DELETE FROM event_groups", [])?;
-    conn.execute("UPDATE media_items SET event_group_id=NULL WHERE status='date_verified'", [])?;
 
     let mut stmt = conn.prepare(
         "SELECT id, COALESCE(date_taken, ''), filename, COALESCE(current_path, '')
@@ -87,6 +272,8 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
 
     let http = Client::new();
     let mut geocoder = ReverseGeocoder::new();
+    geocoder.load_persistent_cache(conn);
+    let home_config = read_home_location_config(conn);
     let mut total_groups = 0_i64;
     for (year, mut items) in by_year {
         items.sort_by_key(|x| x.capture_at);
@@ -99,14 +286,19 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
 
         let mut queue = clusters;
         while let Some(cluster) = queue.pop() {
-            let outcome = name_cluster(year, &cluster, ai, &http, &mut geocoder).await?;
+            let outcome = name_cluster(year, &cluster, ai, &http, &mut geocoder, conn, home_config.as_ref()).await?;
             let naming = outcome.suggestion;
             let normalized_for_split = naming
                 .folder_name
                 .strip_prefix(&format!("{year} - "))
                 .unwrap_or(naming.folder_name.as_str());
             let lowered = normalized_for_split.to_ascii_lowercase();
-            if cluster.len() > 20 && (lowered == "family gathering" || lowered == "misc") {
+            const RESPLIT_TRIGGER_NAMES: &[&str] = &[
+                "family gathering", "misc", "weekend moments", "family time",
+                "special memories", "good times", "fun times", "daily life",
+                "everyday moments",
+            ];
+            if cluster.len() > 20 && RESPLIT_TRIGGER_NAMES.iter().any(|n| lowered == *n) {
                 let split = split_cluster_at_largest_gap(&cluster);
                 if split.len() > 1 {
                     runtime_log::info(
@@ -126,7 +318,7 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
 
             let start_date = cluster.first().map(|x| x.capture_at.date()).expect("cluster has item");
             let end_date = cluster.last().map(|x| x.capture_at.date()).expect("cluster has item");
-            let final_folder_name = apply_low_confidence_fallback_if_needed(conn, year, start_date, &naming)?;
+            let final_folder_name = apply_low_confidence_fallback_if_needed(conn, year, start_date, &naming, outcome.location_facts.as_ref())?;
             let final_folder_name = resolve_folder_name_collision(conn, year, &final_folder_name)?;
             let simple_name = final_folder_name
                 .strip_prefix(&format!("{year} - "))
@@ -137,6 +329,10 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
                 .as_ref()
                 .and_then(|metadata| serde_json::to_string(metadata).ok());
             let pass1_model = outcome.pass1.as_ref().and_then(|m| m.model_used.clone());
+            let location_facts_json = outcome
+                .location_facts
+                .as_ref()
+                .and_then(|f| serde_json::to_string(f).ok());
             let needs_fallback = if naming.needs_fallback { 1 } else { 0 };
             let fallback_used = if naming.fallback_used { 1 } else { 0 };
             let is_misc = if naming
@@ -154,9 +350,10 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
                 "INSERT INTO event_groups(
                     year, name, folder_name, ai_suggested_name, is_misc, user_approved, item_count, start_date, end_date,
                     ai_event_type, ai_confidence, ai_reasoning, ai_prompt_version, ai_model_used, ai_location_used,
-                    ai_needs_fallback, ai_fallback_used, ai_fallback_model, ai_pass1_result, ai_pass1_model
+                    ai_needs_fallback, ai_fallback_used, ai_fallback_model, ai_pass1_result, ai_pass1_model,
+                    ai_cluster_location_facts
                  )
-                 VALUES(?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                 VALUES(?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                 params![
                     year,
                     simple_name,
@@ -179,9 +376,13 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
                     fallback_used,
                     naming.fallback_model,
                     pass1_json,
-                    pass1_model
+                    pass1_model,
+                    location_facts_json,
                 ],
             )?;
+            // Capture the event_group row id immediately. A later audit_log insert also
+            // updates last_insert_rowid(), which would otherwise break FK assignment.
+            let group_id = conn.last_insert_rowid();
             conn.execute(
                 "INSERT INTO audit_log(media_item_id, action, source, details)
                  VALUES(NULL, 'ai_event_naming_decision', 'event_grouper', ?1)",
@@ -206,10 +407,10 @@ pub async fn run(conn: &Connection, ai: &AiClient) -> Result<()> {
                         .as_ref()
                         .and_then(|m| m.prompt_version.clone())
                         .unwrap_or_else(|| CLUSTER_METADATA_PROMPT_VERSION.to_string()),
+                    "cluster_location_facts": outcome.location_facts,
                 })
                 .to_string()],
             )?;
-            let group_id = conn.last_insert_rowid();
             total_groups += 1;
             for item in cluster {
                 conn.execute(
@@ -229,6 +430,8 @@ async fn name_cluster(
     ai: &AiClient,
     http: &Client,
     geocoder: &mut ReverseGeocoder,
+    conn: &Connection,
+    home: Option<&HomeLocationConfig>,
 ) -> Result<ClusterNamingOutcome> {
     if cluster.len() < 3 {
         return Ok(ClusterNamingOutcome {
@@ -246,6 +449,7 @@ async fn name_cluster(
                 fallback_model: None,
             },
             pass1: None,
+            location_facts: None,
         });
     }
     let holiday_default = if is_holiday_cluster(cluster) {
@@ -266,11 +470,21 @@ async fn name_cluster(
         None
     };
 
+    let location_facts = compute_cluster_location_facts(cluster, http, geocoder, conn, home).await?;
+
     let sampled = sample_cluster_items(cluster);
     let start_date = cluster.first().map(|x| x.capture_at.date()).expect("cluster item");
     let end_date = cluster.last().map(|x| x.capture_at.date()).expect("cluster item");
     let day_count = (end_date - start_date).num_days() + 1;
-    let location_hint = find_location_hint(cluster, http, geocoder).await?;
+    let location_hint = find_location_hint(cluster, http, geocoder, conn).await?;
+
+    let has_location_facts = location_facts.gps_coverage_percent > 0.0;
+    let facts_option = if has_location_facts {
+        Some(location_facts.clone())
+    } else {
+        None
+    };
+
     let request = EventNamingRequest {
         year,
         start_date: start_date.to_string(),
@@ -281,6 +495,7 @@ async fn name_cluster(
         location_hint,
         sample_image_paths: sampled.into_iter().map(|x| x.current_path).collect(),
         cluster_metadata: None,
+        cluster_location_facts: facts_option.clone(),
     };
     let pass1 = if cluster.len() >= PASS1_MIN_CLUSTER_SIZE {
         Some(ai.derive_cluster_metadata(&request).await?)
@@ -298,7 +513,11 @@ async fn name_cluster(
     if suggestion.folder_name.trim().is_empty() {
         suggestion.folder_name = format!("{year} - Misc");
     }
-    Ok(ClusterNamingOutcome { suggestion, pass1 })
+    Ok(ClusterNamingOutcome {
+        suggestion,
+        pass1,
+        location_facts: facts_option,
+    })
 }
 
 fn apply_low_confidence_fallback_if_needed(
@@ -306,17 +525,32 @@ fn apply_low_confidence_fallback_if_needed(
     year: i32,
     start_date: NaiveDate,
     naming: &EventNameSuggestion,
+    location_facts: Option<&ClusterLocationFacts>,
 ) -> Result<String> {
     if !naming.confidence.eq_ignore_ascii_case("low") {
         return Ok(naming.folder_name.trim().to_string());
     }
-    let fallback = if naming
+    let is_misc = naming
         .event_type
         .as_deref()
         .map(|x| x.eq_ignore_ascii_case("misc"))
-        .unwrap_or(false)
-    {
-        format!("{year} - {} Memories", start_date.format("%B"))
+        .unwrap_or(false);
+
+    let fallback = if is_misc {
+        // Try location-based fallback for away-from-home clusters
+        if let Some(facts) = location_facts {
+            if facts.away_from_home == Some(true) {
+                if let Some(ref loc) = facts.dominant_location {
+                    format!("{year} - {loc} Trip")
+                } else {
+                    format!("{year} - {} Memories", start_date.format("%B"))
+                }
+            } else {
+                format!("{year} - {} Memories", start_date.format("%B"))
+            }
+        } else {
+            format!("{year} - {} Memories", start_date.format("%B"))
+        }
     } else {
         naming.folder_name.trim().to_string()
     };
@@ -329,23 +563,43 @@ fn apply_low_confidence_fallback_if_needed(
 }
 
 fn resolve_folder_name_collision(conn: &Connection, year: i32, folder_name: &str) -> Result<String> {
-    let mut candidate = folder_name.trim().to_string();
-    let mut counter = 2;
-    loop {
+    let base = folder_name.trim().to_string();
+
+    let folder_exists = |name: &str| -> Result<bool> {
         let exists: i64 = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM event_groups WHERE year=?1 AND lower(trim(folder_name))=lower(trim(?2)))",
-            params![year, candidate],
+            params![year, name],
             |row| row.get(0),
         )?;
-        if exists == 0 {
+        Ok(exists != 0)
+    };
+
+    if !folder_exists(&base)? {
+        return Ok(base);
+    }
+
+    runtime_log::warn(
+        "event_grouper",
+        format!("Folder name collision detected for year {year}: '{base}'. Trying differentiators."),
+    );
+
+    // Try "(Early)" / "(Late)" differentiator
+    let early_candidate = format!("{base} (Early)");
+    if !folder_exists(&early_candidate)? {
+        return Ok(early_candidate);
+    }
+    let late_candidate = format!("{base} (Late)");
+    if !folder_exists(&late_candidate)? {
+        return Ok(late_candidate);
+    }
+
+    // Final fallback: numeric suffix
+    let mut counter = 2;
+    loop {
+        let candidate = format!("{base} {counter}");
+        if !folder_exists(&candidate)? {
             return Ok(candidate);
         }
-        runtime_log::warn(
-            "event_grouper",
-            format!("Folder name collision detected for year {year}: '{candidate}'. Applying suffix."),
-        );
-        let base = folder_name.trim();
-        candidate = format!("{base} {counter}");
         counter += 1;
     }
 }
@@ -354,11 +608,12 @@ async fn find_location_hint(
     cluster: &[ClusterItem],
     http: &Client,
     geocoder: &mut ReverseGeocoder,
+    conn: &Connection,
 ) -> Result<Option<String>> {
     for item in cluster {
         let path = Path::new(item.current_path.as_str());
         if let Some((lat, lon)) = exiftool::read_gps_coordinates(path).await? {
-            let result = geocoder.reverse_geocode(http, lat, lon).await;
+            let result = geocoder.reverse_geocode(http, Some(conn), lat, lon).await;
             if let Some(hint) = location_hint_from_geocode_result(lat, lon, result) {
                 return Ok(Some(hint));
             }
@@ -367,156 +622,6 @@ async fn find_location_hint(
     Ok(None)
 }
 
-fn location_hint_from_geocode_result(
-    lat: f64,
-    lon: f64,
-    result: Result<Option<(String, String)>>,
-) -> Option<String> {
-    match result {
-        Ok(Some((city, country))) => Some(format!(
-            "GPS data suggests these photos were taken in: {city}, {country}"
-        )),
-        Ok(None) => None,
-        Err(err) => {
-            runtime_log::warn(
-                "event_grouper",
-                format!("Reverse geocoding failed for ({lat}, {lon}): {err}"),
-            );
-            None
-        }
-    }
-}
-
-struct ReverseGeocoder {
-    cache: HashMap<String, Option<(String, String)>>,
-    last_request_at: Option<Instant>,
-    min_interval: Duration,
-}
-
-impl ReverseGeocoder {
-    fn new() -> Self {
-        Self {
-            cache: HashMap::new(),
-            last_request_at: None,
-            min_interval: Duration::from_millis(NOMINATIM_MIN_REQUEST_INTERVAL_MS),
-        }
-    }
-
-    async fn reverse_geocode(&mut self, http: &Client, latitude: f64, longitude: f64) -> Result<Option<(String, String)>> {
-        self.reverse_geocode_with_transport(latitude, longitude, |lat, lon| async move {
-            reverse_geocode_nominatim(http, lat, lon).await
-        })
-        .await
-    }
-
-    async fn reverse_geocode_with_transport<F, Fut>(
-        &mut self,
-        latitude: f64,
-        longitude: f64,
-        transport: F,
-    ) -> Result<Option<(String, String)>>
-    where
-        F: FnOnce(f64, f64) -> Fut,
-        Fut: std::future::Future<Output = Result<Option<(String, String)>>>,
-    {
-        let key = geocode_cache_key(latitude, longitude);
-        if let Some(cached) = self.cache.get(&key) {
-            return Ok(cached.clone());
-        }
-        self.enforce_rate_limit().await;
-        let value = transport(latitude, longitude).await?;
-        self.cache.insert(key, value.clone());
-        Ok(value)
-    }
-
-    async fn enforce_rate_limit(&mut self) {
-        if let Some(last_request_at) = self.last_request_at {
-            let elapsed = last_request_at.elapsed();
-            if elapsed < self.min_interval {
-                tokio::time::sleep(self.min_interval - elapsed).await;
-            }
-        }
-        self.last_request_at = Some(Instant::now());
-    }
-}
-
-fn geocode_cache_key(latitude: f64, longitude: f64) -> String {
-    format!("{latitude:.2}:{longitude:.2}")
-}
-
-fn build_nominatim_reverse_request(
-    http: &Client,
-    latitude: f64,
-    longitude: f64,
-) -> Result<reqwest::Request> {
-    Ok(http
-        .get(NOMINATIM_REVERSE_URL)
-        .query(&[
-            ("lat", latitude.to_string()),
-            ("lon", longitude.to_string()),
-            ("format", "json".to_string()),
-        ])
-        .header("User-Agent", NOMINATIM_USER_AGENT)
-        .build()?)
-}
-
-async fn reverse_geocode_nominatim(
-    http: &Client,
-    latitude: f64,
-    longitude: f64,
-) -> Result<Option<(String, String)>> {
-    let request = build_nominatim_reverse_request(http, latitude, longitude)?;
-    let value = http
-        .execute(request)
-        .await?
-        .error_for_status()?
-        .json::<serde_json::Value>()
-        .await?;
-    Ok(extract_city_country(&value))
-}
-
-fn extract_city_country(value: &serde_json::Value) -> Option<(String, String)> {
-    if let Some(result) = value
-        .get("results")
-        .and_then(|x| x.as_array())
-        .and_then(|arr| arr.first())
-    {
-        let city = result
-            .get("name")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        let country = result
-            .get("country")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if !city.is_empty() && !country.is_empty() {
-            return Some((city, country));
-        }
-    }
-
-    let city = value
-        .get("address")
-        .and_then(|x| x.get("city").or_else(|| x.get("town")).or_else(|| x.get("village")))
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let country = value
-        .get("address")
-        .and_then(|x| x.get("country"))
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if !city.is_empty() && !country.is_empty() {
-        return Some((city, country));
-    }
-    None
-}
 
 fn sample_cluster_items(cluster: &[ClusterItem]) -> Vec<ClusterItem> {
     if cluster.is_empty() {
@@ -671,6 +776,11 @@ fn parse_capture_datetime(value: &str) -> Option<NaiveDateTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::geocoding::{
+        build_nominatim_reverse_request, extract_city_country, geocode_cache_key,
+        NOMINATIM_USER_AGENT,
+    };
+    use tokio::time::{Duration, Instant};
 
     fn dt(s: &str) -> NaiveDateTime {
         parse_capture_datetime(s).expect("valid datetime")
@@ -725,7 +835,7 @@ mod tests {
             p
         };
         let conn = crate::db::init_db(db_path.as_path()).expect("db init");
-        let result = apply_low_confidence_fallback_if_needed(&conn, 2026, start, &suggestion).expect("fallback");
+        let result = apply_low_confidence_fallback_if_needed(&conn, 2026, start, &suggestion, None).expect("fallback");
         assert_eq!(result, "2026 - February Memories");
     }
 
@@ -830,7 +940,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let first_calls = Arc::clone(&calls);
         let first = geocoder
-            .reverse_geocode_with_transport(45.5231, -122.6765, move |_lat, _lon| async move {
+            .reverse_geocode_with_transport(None, 45.5231, -122.6765, move |_lat, _lon| async move {
                 first_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(Some(("Portland".to_string(), "United States".to_string())))
             })
@@ -838,7 +948,7 @@ mod tests {
             .expect("first geocode");
         let second_calls = Arc::clone(&calls);
         let second = geocoder
-            .reverse_geocode_with_transport(45.5249, -122.6789, move |_lat, _lon| async move {
+            .reverse_geocode_with_transport(None, 45.5249, -122.6789, move |_lat, _lon| async move {
                 second_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(Some(("Portland".to_string(), "United States".to_string())))
             })
@@ -850,20 +960,16 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limiter_delays_second_uncached_request() {
-        let mut geocoder = ReverseGeocoder {
-            cache: HashMap::new(),
-            last_request_at: None,
-            min_interval: Duration::from_millis(200),
-        };
+        let mut geocoder = ReverseGeocoder::with_min_interval(Duration::from_millis(200));
         let _ = geocoder
-            .reverse_geocode_with_transport(45.10, -122.10, |_lat, _lon| async {
+            .reverse_geocode_with_transport(None, 45.10, -122.10, |_lat, _lon| async {
                 Ok(Some(("A".to_string(), "B".to_string())))
             })
             .await
             .expect("first");
         let started = Instant::now();
         let _ = geocoder
-            .reverse_geocode_with_transport(46.10, -123.10, |_lat, _lon| async {
+            .reverse_geocode_with_transport(None, 46.10, -123.10, |_lat, _lon| async {
                 Ok(Some(("A".to_string(), "B".to_string())))
             })
             .await
@@ -894,7 +1000,7 @@ mod tests {
         )
         .expect("seed existing");
         let resolved = resolve_folder_name_collision(&conn, 2026, "2026 - Birthday Party").expect("resolve");
-        assert_eq!(resolved, "2026 - Birthday Party 2");
+        assert_eq!(resolved, "2026 - Birthday Party (Early)");
     }
 
     #[test]
@@ -933,5 +1039,108 @@ mod tests {
             .expect("excluded count");
         assert_eq!(grouped_count, 1);
         assert_eq!(excluded_count, 1);
+    }
+
+    #[tokio::test]
+    async fn run_clears_stale_event_group_links_before_delete() {
+        let mut db_path = std::env::temp_dir();
+        db_path.push(format!("memoria-group-fk-reset-{}.db", rand::random::<u64>()));
+        let conn = crate::db::init_db(&db_path).expect("db");
+        conn.execute(
+            "INSERT INTO event_groups(id, year, name, folder_name, user_approved, item_count)
+             VALUES(999, 2026, 'Old Group', '2026 - Old Group', 0, 1)",
+            [],
+        )
+        .expect("seed old group");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, date_taken, date_needs_review, mime_type, event_group_id)
+             VALUES('old1', 'old_grouped.jpg', 'C:\\tmp\\old_grouped.jpg', 'grouped', '2026-01-01', 0, 'image/jpeg', 999)",
+            [],
+        )
+        .expect("seed grouped row with stale event_group_id");
+        conn.execute(
+            "INSERT INTO media_items(icloud_id, filename, current_path, status, date_taken, date_needs_review, mime_type)
+             VALUES('new1', 'new_verified.jpg', 'C:\\tmp\\new_verified.jpg', 'date_verified', '2026-02-01', 0, 'image/jpeg')",
+            [],
+        )
+        .expect("seed date-verified row");
+
+        let ai =
+            crate::services::ai_client::AiClient::new(None, None, crate::services::ai_client::AiRoutingConfig::default());
+        run(&conn, &ai).await.expect("grouping run should succeed");
+
+        let stale_link_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_items WHERE status='grouped' AND event_group_id=999",
+                [],
+                |r| r.get(0),
+            )
+            .expect("stale link count");
+        assert_eq!(stale_link_count, 0);
+    }
+
+    #[test]
+    fn evenly_distributed_indices_samples_correctly() {
+        assert_eq!(evenly_distributed_indices(10, 5), vec![0, 2, 5, 7, 9]);
+        assert_eq!(evenly_distributed_indices(3, 5), vec![0, 1, 2]);
+        assert_eq!(evenly_distributed_indices(0, 5), Vec::<usize>::new());
+        assert_eq!(evenly_distributed_indices(1, 5), vec![0]);
+        assert_eq!(evenly_distributed_indices(5, 5), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn cluster_duration_and_distinct_days_computes_correctly() {
+        let cluster = vec![
+            item(1, "2025-07-01 10:00:00", "a.jpg"),
+            item(2, "2025-07-01 14:00:00", "b.jpg"),
+            item(3, "2025-07-03 10:00:00", "c.jpg"),
+            item(4, "2025-07-05 10:00:00", "d.jpg"),
+        ];
+        let (duration, distinct) = cluster_duration_and_distinct_days(&cluster);
+        assert_eq!(duration, 5); // July 1-5 inclusive
+        assert_eq!(distinct, 3); // July 1, 3, 5
+    }
+
+    #[test]
+    fn cluster_duration_empty_cluster() {
+        let (duration, distinct) = cluster_duration_and_distinct_days(&[]);
+        assert_eq!(duration, 0);
+        assert_eq!(distinct, 0);
+    }
+
+    #[test]
+    fn home_location_config_reads_from_db() {
+        let mut db_path = std::env::temp_dir();
+        db_path.push(format!("memoria-home-loc-{}.db", rand::random::<u64>()));
+        let conn = crate::db::init_db(&db_path).expect("db");
+
+        // No home location configured
+        assert!(read_home_location_config(&conn).is_none());
+
+        // Set home location
+        crate::db::set_setting(&conn, "home_latitude", "36.16").expect("set");
+        crate::db::set_setting(&conn, "home_longitude", "-86.78").expect("set");
+        crate::db::set_setting(&conn, "home_label", "Nashville").expect("set");
+
+        let config = read_home_location_config(&conn).expect("some");
+        assert!((config.latitude - 36.16).abs() < 0.01);
+        assert!((config.longitude - (-86.78)).abs() < 0.01);
+        assert_eq!(config.label.as_deref(), Some("Nashville"));
+        assert!((config.radius_miles - 25.0).abs() < 0.01);
+
+        drop(conn);
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn location_consistency_enum_values() {
+        // This test ensures the standardized enum values
+        let valid_values = ["consistent", "mixed", "none"];
+        for val in valid_values {
+            assert!(
+                ["consistent", "mixed", "none"].contains(&val),
+                "{val} is not a valid location_consistency value"
+            );
+        }
     }
 }

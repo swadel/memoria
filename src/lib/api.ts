@@ -21,13 +21,25 @@ export interface SessionInput {
   outputDirectory: string;
 }
 
+export interface HomeLocation {
+  addressRaw: string;
+  label: string | null;
+  latitude: number;
+  longitude: number;
+  radiusMiles: number;
+}
+
 export interface AppConfiguration {
   workingDirectory: string;
   outputDirectory: string;
   aiTaskModels: {
     dateEstimation: { provider: string; model: string };
+    dateEstimationFallback: { provider: string; model: string } | null;
     eventNaming: { provider: string; model: string };
+    eventNamingFallback: { provider: string; model: string } | null;
+    groupingPass1: { provider: string; model: string } | null;
   };
+  homeLocation: HomeLocation | null;
 }
 
 export interface ResetSessionResult {
@@ -66,12 +78,45 @@ export function setAnthropicKey(apiKey: string) {
   return invokeCommand<void>("set_anthropic_key", { apiKey });
 }
 
+export type AiTaskName =
+  | "dateEstimation"
+  | "dateEstimationFallback"
+  | "eventNaming"
+  | "eventNamingFallback"
+  | "groupingPass1";
+
+export type OptionalAiTaskName =
+  | "dateEstimationFallback"
+  | "eventNamingFallback"
+  | "groupingPass1";
+
 export function setAiTaskModel(
-  task: "dateEstimation" | "eventNaming",
+  task: AiTaskName,
   provider: "openai" | "anthropic",
   model: string
 ) {
   return invokeCommand<void>("set_ai_task_model", { task, provider, model });
+}
+
+export function clearAiTaskModel(task: OptionalAiTaskName) {
+  return invokeCommand<void>("clear_ai_task_model", { task });
+}
+
+export function setHomeLocation(
+  address: string,
+  label?: string,
+  radiusMiles?: number
+) {
+  return invokeCommand<HomeLocation>("set_home_location", {
+    address,
+    label: label ?? null,
+    radiusMiles: radiusMiles ?? null,
+    radius_miles: radiusMiles ?? null,
+  });
+}
+
+export function clearHomeLocation() {
+  return invokeCommand<void>("clear_home_location");
 }
 
 export function getAppConfiguration() {

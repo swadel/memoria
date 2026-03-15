@@ -1,9 +1,10 @@
 use anyhow::Result as AnyResult;
+use reqwest::Client;
 use serde::Serialize;
 use std::path::Path;
 use tauri::State;
 
-use crate::{db, services::{exiftool, settings}, AppState};
+use crate::{db, services::{exiftool, geocoding, settings}, AppState};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -22,12 +23,23 @@ pub struct AiTaskModels {
     pub grouping_pass1: Option<TaskModelSelection>,
 }
 
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeLocation {
+    pub address_raw: String,
+    pub label: Option<String>,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub radius_miles: f64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfiguration {
     pub working_directory: String,
     pub output_directory: String,
     pub ai_task_models: AiTaskModels,
+    pub home_location: Option<HomeLocation>,
 }
 
 #[derive(Serialize, Clone)]
@@ -49,7 +61,9 @@ pub struct ToolHealth {
 #[tauri::command]
 pub async fn initialize_app(state: State<'_, AppState>) -> Result<(), String> {
     let conn = state.open_conn().map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "grouping_threshold_days", "2").map_err(|e| e.to_string())?;
+    if db::get_setting(&conn, "grouping_threshold_days").map_err(|e| e.to_string())?.is_none() {
+        db::set_setting(&conn, "grouping_threshold_days", "2").map_err(|e| e.to_string())?;
+    }
     if db::get_setting(&conn, "ai_model_date_estimation").map_err(|e| e.to_string())?.is_none() {
         db::set_setting(&conn, "ai_model_date_estimation_provider", "anthropic").map_err(|e| e.to_string())?;
         db::set_setting(&conn, "ai_model_date_estimation", "claude-sonnet-4-6").map_err(|e| e.to_string())?;
@@ -114,10 +128,12 @@ pub fn get_app_configuration(state: State<'_, AppState>) -> Result<AppConfigurat
             "ai_model_grouping_pass1",
         )?,
     };
+    let home_location = read_home_location(&conn)?;
     Ok(AppConfiguration {
         working_directory,
         output_directory,
         ai_task_models,
+        home_location,
     })
 }
 
@@ -200,28 +216,88 @@ pub async fn set_ai_task_model(
     if provider != "openai" && provider != "anthropic" {
         return Err("Provider must be 'openai' or 'anthropic'.".to_string());
     }
-    let (provider_key, model_key) = match task.as_str() {
-        "dateEstimation" => ("ai_model_date_estimation_provider", "ai_model_date_estimation"),
-        "dateEstimationFallback" => (
-            "ai_model_date_estimation_fallback_provider",
-            "ai_model_date_estimation_fallback",
-        ),
-        "eventNaming" => ("ai_model_event_naming_provider", "ai_model_event_naming"),
-        "eventNamingFallback" => (
-            "ai_model_event_naming_fallback_provider",
-            "ai_model_event_naming_fallback",
-        ),
-        "groupingPass1" => ("ai_model_grouping_pass1_provider", "ai_model_grouping_pass1"),
-        _ => {
-            return Err(
-                "Unknown AI task. Expected dateEstimation/dateEstimationFallback/eventNaming/eventNamingFallback/groupingPass1."
-                    .to_string(),
-            )
-        }
-    };
+    let (provider_key, model_key) = ai_task_model_setting_keys(task.as_str()).ok_or_else(|| {
+        "Unknown AI task. Expected dateEstimation/dateEstimationFallback/eventNaming/eventNamingFallback/groupingPass1."
+            .to_string()
+    })?;
     let conn = state.open_conn().map_err(|e| e.to_string())?;
     db::set_setting(&conn, provider_key, &provider).map_err(|e| e.to_string())?;
     db::set_setting(&conn, model_key, &model).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "last_settings_write_ts", &chrono::Utc::now().to_rfc3339())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_ai_task_model(task: String, state: State<'_, AppState>) -> Result<(), String> {
+    let task = task.trim().to_string();
+    if task.is_empty() {
+        return Err("Task is required.".to_string());
+    }
+    let conn = state.open_conn().map_err(|e| e.to_string())?;
+    clear_ai_task_model_settings(&conn, task.as_str())?;
+    db::set_setting(&conn, "last_settings_write_ts", &chrono::Utc::now().to_rfc3339())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_home_location(
+    address: String,
+    label: Option<String>,
+    radius_miles: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<HomeLocation, String> {
+    let address = address.trim().to_string();
+    if address.is_empty() {
+        return Err("Home address cannot be empty.".to_string());
+    }
+    let radius = radius_miles.unwrap_or(25.0);
+    if radius <= 0.0 {
+        return Err("Home radius must be positive.".to_string());
+    }
+    let http = Client::new();
+    let geocoded = geocoding::forward_geocode_nominatim(&http, &address)
+        .await
+        .map_err(|e| format!("Geocoding failed: {e}"))?;
+    let (lat, lon, _display) = geocoded.ok_or_else(|| {
+        format!(
+            "Could not geocode address: '{}'. Please try a more specific location (e.g. 'Nashville, TN' or '37209').",
+            address
+        )
+    })?;
+    let label_val = label.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()).map(String::from);
+    let conn = state.open_conn().map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "home_address_raw", &address).map_err(|e| e.to_string())?;
+    if let Some(ref lbl) = label_val {
+        db::set_setting(&conn, "home_label", lbl).map_err(|e| e.to_string())?;
+    } else {
+        clear_setting_if_exists(&conn, "home_label").map_err(|e| e.to_string())?;
+    }
+    db::set_setting(&conn, "home_latitude", &lat.to_string()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "home_longitude", &lon.to_string()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "home_radius_miles", &radius.to_string()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "last_settings_write_ts", &chrono::Utc::now().to_rfc3339())
+        .map_err(|e| e.to_string())?;
+    Ok(HomeLocation {
+        address_raw: address,
+        label: label_val,
+        latitude: lat,
+        longitude: lon,
+        radius_miles: radius,
+    })
+}
+
+#[tauri::command]
+pub async fn clear_home_location(state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.open_conn().map_err(|e| e.to_string())?;
+    for key in &[
+        "home_address_raw",
+        "home_label",
+        "home_latitude",
+        "home_longitude",
+        "home_radius_miles",
+    ] {
+        clear_setting_if_exists(&conn, key).map_err(|e| e.to_string())?;
+    }
     db::set_setting(&conn, "last_settings_write_ts", &chrono::Utc::now().to_rfc3339())
         .map_err(|e| e.to_string())
 }
@@ -307,6 +383,46 @@ fn clear_setting_if_exists(conn: &rusqlite::Connection, key: &str) -> AnyResult<
     Ok(())
 }
 
+fn ai_task_model_setting_keys(task: &str) -> Option<(&'static str, &'static str)> {
+    match task {
+        "dateEstimation" => Some(("ai_model_date_estimation_provider", "ai_model_date_estimation")),
+        "dateEstimationFallback" => Some((
+            "ai_model_date_estimation_fallback_provider",
+            "ai_model_date_estimation_fallback",
+        )),
+        "eventNaming" => Some(("ai_model_event_naming_provider", "ai_model_event_naming")),
+        "eventNamingFallback" => Some((
+            "ai_model_event_naming_fallback_provider",
+            "ai_model_event_naming_fallback",
+        )),
+        "groupingPass1" => Some(("ai_model_grouping_pass1_provider", "ai_model_grouping_pass1")),
+        _ => None,
+    }
+}
+
+fn clearable_ai_task_model_setting_keys(task: &str) -> Result<(&'static str, &'static str), String> {
+    match task {
+        "dateEstimationFallback" | "eventNamingFallback" | "groupingPass1" => {
+            ai_task_model_setting_keys(task).ok_or_else(|| "Unknown AI task.".to_string())
+        }
+        "dateEstimation" | "eventNaming" => Err(
+            "Cannot clear required AI task model. Only dateEstimationFallback/eventNamingFallback/groupingPass1 can be cleared."
+                .to_string(),
+        ),
+        _ => Err(
+            "Unknown AI task. Expected dateEstimationFallback/eventNamingFallback/groupingPass1."
+                .to_string(),
+        ),
+    }
+}
+
+fn clear_ai_task_model_settings(conn: &rusqlite::Connection, task: &str) -> Result<(), String> {
+    let (provider_key, model_key) = clearable_ai_task_model_setting_keys(task)?;
+    clear_setting_if_exists(conn, provider_key).map_err(|e| e.to_string())?;
+    clear_setting_if_exists(conn, model_key).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn read_task_model(
     conn: &rusqlite::Connection,
     provider_key: &str,
@@ -322,6 +438,36 @@ fn read_task_model(
         .filter(|v| !v.trim().is_empty())
         .unwrap_or(fallback.model);
     Ok(TaskModelSelection { provider, model })
+}
+
+fn read_home_location(conn: &rusqlite::Connection) -> Result<Option<HomeLocation>, String> {
+    let lat = db::get_setting(conn, "home_latitude")
+        .map_err(|e| e.to_string())?
+        .and_then(|v| v.parse::<f64>().ok());
+    let lon = db::get_setting(conn, "home_longitude")
+        .map_err(|e| e.to_string())?
+        .and_then(|v| v.parse::<f64>().ok());
+    let (lat, lon) = match (lat, lon) {
+        (Some(la), Some(lo)) => (la, lo),
+        _ => return Ok(None),
+    };
+    let address_raw = db::get_setting(conn, "home_address_raw")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let label = db::get_setting(conn, "home_label")
+        .map_err(|e| e.to_string())?
+        .filter(|v| !v.trim().is_empty());
+    let radius_miles = db::get_setting(conn, "home_radius_miles")
+        .map_err(|e| e.to_string())?
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(25.0);
+    Ok(Some(HomeLocation {
+        address_raw,
+        label,
+        latitude: lat,
+        longitude: lon,
+        radius_miles,
+    }))
 }
 
 fn read_optional_task_model(
@@ -640,6 +786,41 @@ mod tests {
         let _ = fs::remove_file(db_path);
     }
 
+    #[test]
+    fn clear_optional_ai_task_model_removes_both_keys() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+        db::set_setting(&conn, "ai_model_event_naming_fallback_provider", "openai")
+            .expect("set provider");
+        db::set_setting(&conn, "ai_model_event_naming_fallback", "gpt-4o").expect("set model");
+
+        clear_ai_task_model_settings(&conn, "eventNamingFallback").expect("clear fallback");
+
+        let fallback = read_optional_task_model(
+            &conn,
+            "ai_model_event_naming_fallback_provider",
+            "ai_model_event_naming_fallback",
+        )
+        .expect("read optional fallback");
+        assert!(fallback.is_none());
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn clear_required_ai_task_model_rejected() {
+        let err = clearable_ai_task_model_setting_keys("dateEstimation")
+            .expect_err("required model should not be clearable");
+        assert!(err.contains("Cannot clear required AI task model"));
+    }
+
+    #[test]
+    fn clear_unknown_ai_task_model_rejected() {
+        let err = clearable_ai_task_model_setting_keys("unknownTask")
+            .expect_err("unknown task should be rejected");
+        assert!(err.contains("Unknown AI task"));
+    }
+
     #[tokio::test]
     async fn reset_session_impl_state_only_does_not_modify_files() {
         let db_path = temp_db_path();
@@ -720,6 +901,94 @@ mod tests {
         assert_eq!(session_count, 0);
 
         let _ = fs::remove_dir_all(root);
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn grouping_threshold_days_not_overwritten_when_already_set() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+        db::set_setting(&conn, "grouping_threshold_days", "5").expect("set custom threshold");
+
+        // Simulate what initialize_app does (conditional seeding)
+        if db::get_setting(&conn, "grouping_threshold_days")
+            .expect("get")
+            .is_none()
+        {
+            db::set_setting(&conn, "grouping_threshold_days", "2").expect("seed default");
+        }
+
+        let val = db::get_setting(&conn, "grouping_threshold_days")
+            .expect("get")
+            .expect("exists");
+        assert_eq!(val, "5", "Custom value should not be overwritten");
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn home_location_roundtrip_set_read_clear() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+
+        // Initially null
+        let loc = read_home_location(&conn).expect("read");
+        assert!(loc.is_none());
+
+        // Set home location keys directly (simulating what set_home_location does after geocoding)
+        db::set_setting(&conn, "home_address_raw", "Nashville, TN").expect("set");
+        db::set_setting(&conn, "home_label", "Home").expect("set");
+        db::set_setting(&conn, "home_latitude", "36.1627").expect("set");
+        db::set_setting(&conn, "home_longitude", "-86.7816").expect("set");
+        db::set_setting(&conn, "home_radius_miles", "25").expect("set");
+
+        let loc = read_home_location(&conn).expect("read").expect("exists");
+        assert_eq!(loc.address_raw, "Nashville, TN");
+        assert_eq!(loc.label.as_deref(), Some("Home"));
+        assert!((loc.latitude - 36.1627).abs() < 0.001);
+        assert!((loc.longitude - (-86.7816)).abs() < 0.001);
+        assert!((loc.radius_miles - 25.0).abs() < 0.01);
+
+        // Clear
+        for key in &[
+            "home_address_raw",
+            "home_label",
+            "home_latitude",
+            "home_longitude",
+            "home_radius_miles",
+        ] {
+            clear_setting_if_exists(&conn, key).expect("clear");
+        }
+        let loc = read_home_location(&conn).expect("read");
+        assert!(loc.is_none());
+
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn home_location_returns_none_without_latitude() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+        db::set_setting(&conn, "home_address_raw", "Nashville").expect("set");
+        // Missing latitude/longitude
+        let loc = read_home_location(&conn).expect("read");
+        assert!(loc.is_none());
+        drop(conn);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn home_location_defaults_radius_to_25() {
+        let db_path = temp_db_path();
+        let conn = init_db(&db_path).expect("init db");
+        db::set_setting(&conn, "home_address_raw", "Nashville, TN").expect("set");
+        db::set_setting(&conn, "home_latitude", "36.16").expect("set");
+        db::set_setting(&conn, "home_longitude", "-86.78").expect("set");
+        // No radius set -- should default to 25
+        let loc = read_home_location(&conn).expect("read").expect("exists");
+        assert!((loc.radius_miles - 25.0).abs() < 0.01);
         drop(conn);
         let _ = fs::remove_file(db_path);
     }
