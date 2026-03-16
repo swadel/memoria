@@ -301,7 +301,7 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
                 app_handle,
                 "event_grouping",
                 &format!("Naming group {cluster_idx} for {year}..."),
-                cluster_idx,
+                cluster_idx - 1,
                 cluster_total,
             );
             let outcome = name_cluster(year, &cluster, ai, &http, &mut geocoder, conn, home_config.as_ref()).await?;
@@ -437,6 +437,13 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
                     params![group_id, item.id],
                 )?;
             }
+            runtime_log::emit_pipeline_progress(
+                app_handle,
+                "event_grouping",
+                &format!("Named group {cluster_idx} for {year}"),
+                cluster_idx,
+                cluster_total,
+            );
         }
     }
     runtime_log::info("event_grouper", format!("Grouping complete. total_groups={total_groups}."));

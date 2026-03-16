@@ -30,9 +30,9 @@ export const LoadingState: React.FC<LoadingStateProps> = ({
         <p className="text-sm text-slate-500" data-testid="loading-state-hint">{hint}</p>
         {progress && (
           <div className="w-full" style={{ minWidth: 260 }} data-testid="loading-state-progress">
-            <div className="flex items-baseline justify-between gap-3 text-xs text-slate-500 mb-1">
-              <span className="truncate min-w-0" data-testid="loading-state-progress-detail">{progress.detail}</span>
-              {pct !== null && <span className="whitespace-nowrap flex-shrink-0 font-medium" data-testid="loading-state-progress-pct">{pct}%</span>}
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 4, fontSize: 12, color: "#64748b" }}>
+              <span style={{ flex: "1 1 0%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }} data-testid="loading-state-progress-detail">{progress.detail}</span>
+              {pct !== null && <span style={{ whiteSpace: "nowrap", flexShrink: 0, fontWeight: 500 }} data-testid="loading-state-progress-pct">{pct}%</span>}
             </div>
             <div className="w-full h-1.5 rounded-full bg-slate-200 overflow-hidden">
               <div

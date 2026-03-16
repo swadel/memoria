@@ -292,7 +292,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (window.__MEMORIA_TEST_API__) return;
+    if (window.__MEMORIA_TEST_API__) {
+      (window as any).__MEMORIA_SET_PROGRESS__ = setPipelineProgress;
+      return () => { delete (window as any).__MEMORIA_SET_PROGRESS__; };
+    }
     let unlisten: (() => void) | undefined;
     listen<{ phase: string; message: string; current: number; total: number }>(
       "pipeline-progress",
@@ -2947,13 +2950,6 @@ function ImageReviewView({
             data-testid="image-done-proceed"
             className="primaryBtn"
             onClick={() => {
-              const continuing = items.filter((item) => item.status !== "excluded").length;
-              const excluded = items.filter((item) => item.status === "excluded").length;
-              const pending = items.filter((item) => item.status === "indexed" && item.imageFlags.length > 0).length;
-              const ok = window.confirm(
-                `${continuing} images will continue to pipeline. ${excluded} images have been excluded. ${pending} flagged images have not been reviewed. Proceed?`
-              );
-              if (!ok) return;
               void onDone();
             }}
           >

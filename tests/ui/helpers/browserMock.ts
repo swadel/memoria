@@ -14,7 +14,8 @@ type BrowserFixtureProfile =
   | "reset-slow"
   | "ingest-slow"
   | "complete"
-  | "grouping-empty";
+  | "grouping-empty"
+  | "image-scan-busy";
 
 type DateEstimate = {
   mediaItemId: number;
@@ -184,10 +185,11 @@ function buildState(profile: BrowserFixtureProfile) {
   }
 
   const isComplete = profile === "complete";
+  const isImageScanBusy = profile === "image-scan-busy";
   const stats = {
     total: isIngestSlow || isPreIndex ? 0 : 8,
     indexed: isPreIndex ? 0 : 2,
-    imageReview: isComplete || isPreIndex ? 0 : 2,
+    imageReview: isComplete || isPreIndex || isImageScanBusy ? 0 : 2,
     imageVerified: isPreIndex ? 0 : 4,
     dateReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy || isDashboardVideoOnly ? 0 : profile === "pre-video" ? 0 : Math.max(1, dateItems.length),
     dateNeedsReview: isComplete || isGroupingEmpty || isPreIndex || isVideoToDates || isFinalizeBusy || isDashboardVideoOnly ? 0 : profile === "pre-video" ? Math.max(1, dateItems.length) : dateItems.length,
@@ -195,7 +197,7 @@ function buildState(profile: BrowserFixtureProfile) {
     grouped: isComplete ? 8 : isGroupingEmpty || isPreIndex ? 0 : 2,
     filed: isComplete ? 8 : isPreIndex ? 0 : 1,
     imageFlaggedPending: isComplete || isPreIndex ? 0 : 2,
-    imagePhaseState: (profile === "pre-video" || isIngestSlow || isPreIndex ? "pending" : "complete") as "pending" | "in_progress" | "complete",
+    imagePhaseState: (profile === "pre-video" || isIngestSlow || isPreIndex || isImageScanBusy ? "pending" : "complete") as "pending" | "in_progress" | "complete",
     videoTotal: 3,
     videoFlagged: 2,
     videoExcluded: 1,
@@ -407,7 +409,7 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
       if (!state) return;
       const delayed = (value: unknown, ms = 320) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
       const withPhaseDelay = (value: unknown) =>
-        fixtureProfile === "phase-busy" || fixtureProfile === "video-to-dates" || fixtureProfile === "finalize-busy"
+        fixtureProfile === "phase-busy" || fixtureProfile === "video-to-dates" || fixtureProfile === "finalize-busy" || fixtureProfile === "image-scan-busy"
           ? delayed(value)
           : Promise.resolve(value);
 

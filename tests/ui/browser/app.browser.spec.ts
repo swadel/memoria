@@ -690,6 +690,84 @@ test.describe("Memoria browser UI", () => {
     await progressPage.close();
   });
 
+  test("loading state progress does not concatenate percentage with filename", async ({ context }) => {
+    const progressPage = await context.newPage();
+    await installBrowserApiMock(progressPage, "phase-busy");
+    await progressPage.goto("/");
+    await progressPage.getByTestId("tab-images").click();
+    progressPage.once("dialog", (dialog) => dialog.accept());
+    await progressPage.getByTestId("image-done-proceed").click();
+    await expect(progressPage.getByTestId("loading-state-root")).toBeVisible();
+
+    await progressPage.evaluate(() => {
+      const setProgress = (window as any).__MEMORIA_SET_PROGRESS__;
+      if (setProgress) {
+        setProgress({ current: 160, total: 269, detail: "Indexing: IMG_6703.JPEG" });
+      }
+    });
+
+    const detail = progressPage.getByTestId("loading-state-progress-detail");
+    const pct = progressPage.getByTestId("loading-state-progress-pct");
+    await expect(detail).toBeVisible();
+    await expect(pct).toBeVisible();
+    await expect(detail).toHaveText("Indexing: IMG_6703.JPEG");
+    await expect(pct).toHaveText("59%");
+    await expect(detail).not.toContainText("%");
+
+    const detailFlex = await detail.evaluate((el) => getComputedStyle(el).flexGrow);
+    expect(detailFlex).toBe("1");
+
+    const containerBox = await progressPage.getByTestId("loading-state-progress").boundingBox();
+    const pctBox = await pct.boundingBox();
+    expect(containerBox).not.toBeNull();
+    expect(pctBox).not.toBeNull();
+    if (containerBox && pctBox) {
+      const containerRight = containerBox.x + containerBox.width;
+      const pctRight = pctBox.x + pctBox.width;
+      expect(Math.abs(containerRight - pctRight)).toBeLessThanOrEqual(2);
+    }
+
+    await progressPage.close();
+  });
+
+  test("image review scan busy screen shows progress from image analysis", async ({ context }) => {
+    const scanPage = await context.newPage();
+    await installBrowserApiMock(scanPage, "image-scan-busy");
+    await scanPage.goto("/");
+
+    await scanPage.getByTestId("tab-images").click();
+    await expect(scanPage.getByTestId("global-loading-state")).toBeVisible();
+    await expect(scanPage.getByText("Preparing image review...")).toBeVisible();
+    await expect(scanPage.getByTestId("loading-state-hint")).toContainText("image quality and burst candidates");
+
+    await scanPage.evaluate(() => {
+      const setProgress = (window as any).__MEMORIA_SET_PROGRESS__;
+      if (setProgress) {
+        setProgress({ current: 50, total: 139, detail: "Analyzing image 50/139" });
+      }
+    });
+
+    await expect(scanPage.getByTestId("loading-state-progress")).toBeVisible();
+    await expect(scanPage.getByTestId("loading-state-progress-detail")).toHaveText("Analyzing image 50/139");
+    await expect(scanPage.getByTestId("loading-state-progress-pct")).toHaveText("36%");
+    const bar = scanPage.getByTestId("loading-state-progress-bar");
+    await expect(bar).toHaveAttribute("style", /width:\s*36%/);
+    await expect(scanPage.getByTestId("loading-state-progress-count")).toHaveText("50 of 139");
+
+    await scanPage.evaluate(() => {
+      const setProgress = (window as any).__MEMORIA_SET_PROGRESS__;
+      if (setProgress) {
+        setProgress({ current: 100, total: 139, detail: "Analyzing image 100/139" });
+      }
+    });
+
+    await expect(scanPage.getByTestId("loading-state-progress-detail")).toHaveText("Analyzing image 100/139");
+    await expect(scanPage.getByTestId("loading-state-progress-pct")).toHaveText("72%");
+    await expect(scanPage.getByTestId("loading-state-progress-count")).toHaveText("100 of 139");
+
+    await scanPage.close();
+  });
+
   test("excluded images remain visible after toggling excluded filter", async ({ page }) => {
     await page.getByTestId("tab-images").click();
     await page.getByTestId("image-show-excluded").click();
