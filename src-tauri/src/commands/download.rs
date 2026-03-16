@@ -150,7 +150,7 @@ pub async fn start_download_session_impl(input: SessionInput, state: &AppState, 
         "UPDATE download_sessions SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?1",
         [session_id],
     )?;
-    image_review::run_image_review_scan(&conn, None, None).await?;
+    image_review::run_image_review_scan(&conn, app_handle, None).await?;
     runtime_log::info("download", format!("Session {session_id} indexing complete."));
     Ok(session_id)
 }

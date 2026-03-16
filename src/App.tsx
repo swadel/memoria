@@ -189,6 +189,7 @@ export function App() {
   const [reviewSettings, setReviewSettings] = useState<ImageReviewSettings | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pipelineProgress, setPipelineProgress] = useState<PipelineProgress | null>(null);
+  const [progressPhase, setProgressPhase] = useState<string | null>(null);
   const [showFinalizeToast, setShowFinalizeToast] = useState(false);
   const [completionToastTotal, setCompletionToastTotal] = useState<number | null>(null);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
@@ -305,6 +306,7 @@ export function App() {
           total: event.payload.total,
           detail: event.payload.message
         });
+        setProgressPhase(event.payload.phase);
       }
     )
       .then((fn) => { unlisten = fn; })
@@ -315,6 +317,7 @@ export function App() {
   useEffect(() => {
     if (busyAction === null) {
       setPipelineProgress(null);
+      setProgressPhase(null);
     }
   }, [busyAction]);
 
@@ -613,6 +616,12 @@ export function App() {
   }, [workflowSteps]);
   const loadingStateCopy = useMemo(() => {
     if (busyAction === "ingest") {
+      if (progressPhase === "image_review") {
+        return {
+          message: "Analyzing your images...",
+          hint: "We are evaluating quality, detecting duplicates, and identifying bursts."
+        };
+      }
       return {
         message: "Indexing your media...",
         hint: "We are scanning and staging your files so the review phases can begin."
@@ -655,7 +664,7 @@ export function App() {
       };
     }
     return null;
-  }, [busyAction]);
+  }, [busyAction, progressPhase]);
 
   const normalizedGroupNames = useMemo(() => new Set(groups.map((group) => normalizeName(group.name))), [groups]);
   const activeGroup = useMemo(
@@ -842,7 +851,7 @@ export function App() {
                 }}
               />
             </div>
-            <div className="flex justify-center gap-6 text-sm text-slate-500 py-2">
+            <div className="sr-only">
               <span data-testid="stat-total">{stats.total}</span>
               <span data-testid="stat-indexed">{stats.indexed}</span>
               <span data-testid="stat-grouped">{stats.grouped}</span>
