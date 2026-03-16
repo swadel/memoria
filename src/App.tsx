@@ -222,8 +222,8 @@ export function App() {
       getDashboardStats(),
       getDateReviewQueue(),
       getEventGroups(),
-      getImageReviewItems(showExcludedImages),
-      getVideoReviewItems(showExcludedVideos)
+      getImageReviewItems(true),
+      getVideoReviewItems(true)
     ]);
     setStats(nextStats);
     setDateItems(nextDateItems);
@@ -308,10 +308,6 @@ export function App() {
       .catch(() => undefined);
     return () => { unlisten?.(); };
   }, []);
-
-  useEffect(() => {
-    refreshAll().catch(() => undefined);
-  }, [showExcludedVideos, showExcludedImages]);
 
   useEffect(() => {
     if (busyAction === null) {
@@ -1899,6 +1895,9 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
   const [busyAction, setBusyAction] = useState<"approve" | "skip" | null>(null);
   const [showWhy, setShowWhy] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const isVideo = item.mimeType.startsWith("video/");
 
   useEffect(() => {
     let cancelled = false;
@@ -1941,26 +1940,42 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
   return (
     <div className={`item dateItemCard ${removing ? "itemRemoving" : ""}`} data-testid={`date-item-${item.mediaItemId}`}>
       <div className="dateApprovalCardGrid">
-        <img
-          className="dateThumb"
-          data-testid={`date-thumb-${item.mediaItemId}`}
-          src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)}
-          alt={item.filename}
-          onError={(e) => {
-            const img = e.currentTarget;
-            const fallback = getDateThumbFallbackDataUrl(item.filename);
-            if (img.src !== fallback) {
-              img.src = fallback;
+        <button
+          className="dateThumbButton"
+          data-testid={`date-preview-btn-${item.mediaItemId}`}
+          onClick={() => {
+            if (isVideo && item.currentPath) {
+              setPreviewSrc(getVideoSrcUrl(item.currentPath));
+            } else {
+              getEventGroupMediaPreview(item.mediaItemId)
+                .then((src) => setPreviewSrc(src))
+                .catch(() => setPreviewSrc(thumbSrc));
             }
+            setShowPreview(true);
           }}
-        />
+        >
+          <img
+            className="dateThumb"
+            data-testid={`date-thumb-${item.mediaItemId}`}
+            src={thumbSrc || getDateThumbFallbackDataUrl(item.filename)}
+            alt={item.filename}
+            onError={(e) => {
+              const img = e.currentTarget;
+              const fallback = getDateThumbFallbackDataUrl(item.filename);
+              if (img.src !== fallback) {
+                img.src = fallback;
+              }
+            }}
+          />
+          {isVideo && <span className="dateThumbPlayGlyph">▶</span>}
+        </button>
         <div className="dateMetaStack">
           <strong className="truncateOneLine">{item.filename}</strong>
           <div className="muted">Current date: {item.currentDate ?? "(missing)"}</div>
-          <div className="dateSuggestedLabel">AI Suggested Date</div>
-          <div className="dateSuggestedValue">{item.aiDate ?? "(none)"}</div>
+          <div className="dateSuggestedLabel">{item.aiDate ? "AI Suggested Date" : "AI Could Not Determine Date"}</div>
+          <div className="dateSuggestedValue">{item.aiDate ?? "Enter a date manually below"}</div>
           <div className="row">
-            <span className={`dateConfidenceBadge ${confidenceClass}`}>Confidence {confidencePct}%</span>
+            {item.aiDate && <span className={`dateConfidenceBadge ${confidenceClass}`}>Confidence {confidencePct}%</span>}
             <button
               type="button"
               data-testid={`date-why-${item.mediaItemId}`}
@@ -2009,6 +2024,23 @@ function DateCard({ item, onApply }: { item: DateEstimate; onApply: (date: strin
           {busyAction === "skip" ? "Skipping..." : "Skip"}
         </button>
       </div>
+      {showPreview && (
+        <div className="lightboxOverlay" data-testid={`date-preview-overlay-${item.mediaItemId}`} onClick={() => setShowPreview(false)}>
+          <div className="lightboxCard" onClick={(e) => e.stopPropagation()}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <strong>{item.filename}</strong>
+              <button className="secondaryBtn" data-testid={`date-preview-close-${item.mediaItemId}`} onClick={() => setShowPreview(false)}>Close</button>
+            </div>
+            {isVideo ? (
+              <video data-testid={`date-preview-video-${item.mediaItemId}`} controls src={previewSrc ?? ""} style={{ width: "100%", maxHeight: "55vh", background: "#000" }} />
+            ) : previewSrc ? (
+              <img data-testid={`date-preview-image-${item.mediaItemId}`} src={previewSrc} alt={item.filename} style={{ width: "100%", maxHeight: "55vh", objectFit: "contain" }} />
+            ) : (
+              <div className="muted">Loading preview...</div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2654,6 +2686,7 @@ function ImageReviewView({
   const [previewById, setPreviewById] = useState<Record<number, string>>({});
   const [modalIndex, setModalIndex] = useState<number | null>(null);
   const [thumbs, setThumbs] = useState<Record<number, string>>({});
+  const [showHelp, setShowHelp] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [columnCount, setColumnCount] = useState(4);
   const [gridWidth, setGridWidth] = useState(0);
@@ -2782,6 +2815,25 @@ function ImageReviewView({
         right={<div className="muted" data-testid="image-filter-summary">Showing {flaggedCount} flagged, {unflaggedCount} unflagged - {baseItems.length} total</div>}
       />
 
+      <div className="reviewHelpSection" data-testid="image-review-help">
+        <button className="reviewHelpToggle" data-testid="image-review-help-toggle" onClick={() => setShowHelp((prev) => !prev)}>
+          {showHelp ? "Hide guide" : "How does this work?"}
+        </button>
+        {showHelp && (
+          <div className="reviewHelpContent" data-testid="image-review-help-content">
+            <p><strong>Active</strong> photos continue to the next pipeline stage. <strong>Excluded</strong> photos are moved to the recycle folder.</p>
+            <ul>
+              <li><strong>All Images</strong> &mdash; Everything currently in review.</li>
+              <li><strong>Flagged Only</strong> &mdash; Items the AI flagged for your attention (blurry, too small, burst shots, duplicates, or screenshots).</li>
+              <li><strong>Burst Groups</strong> &mdash; Rapid-fire shots grouped together. Pick the best from each burst.</li>
+              <li><strong>Duplicates</strong> &mdash; Near-identical images detected by visual similarity.</li>
+              <li><strong>Screenshots</strong> &mdash; Items classified as screenshots or memes.</li>
+            </ul>
+            <p>Use the <strong>Sort</strong> dropdown to order by Date, File Size, or Sharpness Score.</p>
+          </div>
+        )}
+      </div>
+
       <ReviewToolbar
         testId="image-filter-bar"
         left={
@@ -2811,16 +2863,14 @@ function ImageReviewView({
         <div data-testid={viewMode === "burst" ? "image-burst-groups-view" : "image-duplicate-groups-view"}>
           {Array.from((viewMode === "burst" ? burstGroups : duplicateGroups).entries()).map(([groupId, groupItems]) => (
             <div key={groupId} className="item" data-testid={viewMode === "burst" ? `image-burst-group-${groupId}` : `image-duplicate-group-${groupId}`}>
-              <div className="row" style={{ justifyContent: "space-between" }}>
+              <div className="row" style={{ gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                 <div className="muted">
                   {viewMode === "burst"
                     ? `Burst group - ${groupItems.length} shots, best auto-selected`
                     : `Duplicate group - ${groupItems.length} similar images`}
                 </div>
-                <div className="row">
-                  <button data-testid={`image-keep-best-only-${groupId}`} className="secondaryBtn" onClick={() => void onKeepBestOnly(groupId)}>Keep Best Only</button>
-                  <button data-testid={`image-keep-all-${groupId}`} className="secondaryBtn" onClick={() => void onKeepAll(groupId)}>Keep All</button>
-                </div>
+                <button data-testid={`image-keep-best-only-${groupId}`} className="secondaryBtn" onClick={() => void onKeepBestOnly(groupId)}>Keep Best Only</button>
+                <button data-testid={`image-keep-all-${groupId}`} className="secondaryBtn" onClick={() => void onKeepAll(groupId)}>Keep All</button>
               </div>
               <motion.div className="eventGroupsGrid" variants={GRID_CONTAINER_VARIANTS} initial="hidden" animate="show" layout>
                 {groupItems.map((item, index) => (
@@ -2946,7 +2996,9 @@ function ImageReviewView({
               <strong>{modalItem.filename}</strong>
               <button data-testid="image-preview-close" className="secondaryBtn" onClick={() => setModalIndex(null)}>Close</button>
             </div>
-            {previewById[modalItem.id] ? (
+            {modalItem.mimeType.startsWith("video/") ? (
+              <video data-testid="image-preview-video" controls src={getVideoSrcUrl(modalItem.currentPath)} style={{ width: "100%", maxHeight: "55vh", background: "#000" }} />
+            ) : previewById[modalItem.id] ? (
               <img data-testid="image-preview-asset" src={previewById[modalItem.id]} alt={modalItem.filename} style={{ width: "100%", maxHeight: "55vh", objectFit: "contain" }} />
             ) : (
               <div className="muted">Loading...</div>
@@ -3030,6 +3082,9 @@ function ImageCard({
     <div className={`${selected ? "mediaTile mediaTileSelected" : "mediaTile"} ${removing ? "itemRemoving" : ""}`} data-testid={`image-item-${item.id}`} style={{ flex: "1 1 0", minWidth: 0, opacity: muted ? 0.65 : 1 }}>
       <button data-testid={`image-open-${item.id}`} className="mediaTileOpen" onClick={onOpen}>
         <img className="mediaTileImage mediaTileImageSquare" src={thumbnail} alt={item.filename} />
+        {item.mimeType.startsWith("video/") && (
+          <span data-testid={`image-play-glyph-${item.id}`} className="mediaTilePlayGlyphStatic">▶</span>
+        )}
       </button>
       <div className="mediaTileOverlay">
         <div className="mediaTileOverlayTop">
@@ -3046,23 +3101,23 @@ function ImageCard({
             </button>
           )}
         </div>
-        <div className="mediaTileOverlayBottom">
-          <strong className="truncateOneLine">{item.filename}</strong>
-          <div className="mediaTileMeta truncateOneLine">
-            {formatFileSize(item.fileSizeBytes)} • {item.dateTaken ?? "(missing date)"}
-            {item.blurScore != null ? ` • blur: ${item.blurScore.toFixed(0)}` : ""}
-            {item.aiQualityScore != null ? ` • AI: ${item.aiQualityScore.toFixed(1)}/10` : ""}
-          </div>
-          <div className="mediaTileBadges">
-            {item.imageFlags.includes("small_file") ? <span data-testid={`image-flag-small-${item.id}`} className="mediaTileBadge">small_file</span> : null}
-            {item.imageFlags.includes("blurry") ? <span data-testid={`image-flag-blurry-${item.id}`} className="mediaTileBadge">blurry</span> : null}
-            {item.imageFlags.includes("poor_exposure") ? <span data-testid={`image-flag-exposure-${item.id}`} className="mediaTileBadge">poor_exposure</span> : null}
-            {item.imageFlags.includes("burst_shot") ? <span data-testid={`image-flag-burst-${item.id}`} className="mediaTileBadge">burst_shot</span> : null}
-            {item.imageFlags.includes("duplicate") ? <span data-testid={`image-flag-duplicate-${item.id}`} className="mediaTileBadge">duplicate</span> : null}
-            {item.imageFlags.includes("screenshot_or_meme") ? <span data-testid={`image-flag-screenshot-${item.id}`} className="mediaTileBadge">screenshot</span> : null}
-            {item.isBurstPrimary ? <span data-testid={`image-flag-best-${item.id}`} className="mediaTileBadge mediaTileBadgeBest">Best</span> : null}
-            {item.aiContentClass && item.aiContentClass !== "photo" ? <span data-testid={`image-flag-ai-class-${item.id}`} className="mediaTileBadge" title="AI classified">AI</span> : null}
-          </div>
+      </div>
+      <div className="mediaTileOverlayBottom">
+        <strong className="truncateOneLine">{item.filename}</strong>
+        <div className="mediaTileMeta truncateOneLine">
+          {formatFileSize(item.fileSizeBytes)} • {item.dateTaken ?? "(missing date)"}
+          {item.blurScore != null ? ` • blur: ${item.blurScore.toFixed(0)}` : ""}
+          {item.aiQualityScore != null ? ` • AI: ${item.aiQualityScore.toFixed(1)}/10` : ""}
+        </div>
+        <div className="mediaTileBadges">
+          {item.imageFlags.includes("small_file") ? <span data-testid={`image-flag-small-${item.id}`} className="mediaTileBadge">small_file</span> : null}
+          {item.imageFlags.includes("blurry") ? <span data-testid={`image-flag-blurry-${item.id}`} className="mediaTileBadge">blurry</span> : null}
+          {item.imageFlags.includes("poor_exposure") ? <span data-testid={`image-flag-exposure-${item.id}`} className="mediaTileBadge">poor_exposure</span> : null}
+          {item.imageFlags.includes("burst_shot") ? <span data-testid={`image-flag-burst-${item.id}`} className="mediaTileBadge">burst_shot</span> : null}
+          {item.imageFlags.includes("duplicate") ? <span data-testid={`image-flag-duplicate-${item.id}`} className="mediaTileBadge">duplicate</span> : null}
+          {item.imageFlags.includes("screenshot_or_meme") ? <span data-testid={`image-flag-screenshot-${item.id}`} className="mediaTileBadge">screenshot</span> : null}
+          {item.isBurstPrimary ? <span data-testid={`image-flag-best-${item.id}`} className="mediaTileBadge mediaTileBadgeBest">Best</span> : null}
+          {item.aiContentClass && item.aiContentClass !== "photo" ? <span data-testid={`image-flag-ai-class-${item.id}`} className="mediaTileBadge" title="AI classified">AI</span> : null}
         </div>
       </div>
     </div>
@@ -3088,7 +3143,7 @@ function VideoReviewView({
   onMessage: (message: string) => void;
   onProceed: () => Promise<void>;
 }) {
-  const [activeFilter, setActiveFilter] = useState<"size" | "duration">("size");
+  const [activeFilter, setActiveFilter] = useState<"size" | "duration">("duration");
   const [sizeThresholdMb, setSizeThresholdMb] = useState(5);
   const [durationThresholdSecs, setDurationThresholdSecs] = useState(10);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -3103,15 +3158,25 @@ function VideoReviewView({
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const filtered = useMemo(
-    () =>
-      items.filter((item) => {
-        const underSize = item.fileSizeBytes <= sizeThresholdMb * 1024 * 1024;
-        const underDuration = item.durationSecs <= durationThresholdSecs;
-        return activeFilter === "size" ? underSize : underDuration;
-      }),
-    [items, sizeThresholdMb, durationThresholdSecs, activeFilter]
-  );
+  const filtered = useMemo(() => {
+    const statusFiltered = showExcluded
+      ? items.filter((item) => item.status === "excluded")
+      : items.filter((item) => item.status !== "excluded");
+
+    const thresholded = showExcluded
+      ? statusFiltered
+      : statusFiltered.filter((item) => {
+          const underSize = item.fileSizeBytes <= sizeThresholdMb * 1024 * 1024;
+          const underDuration = item.durationSecs <= durationThresholdSecs;
+          return activeFilter === "size" ? underSize : underDuration;
+        });
+
+    return [...thresholded].sort((a, b) =>
+      activeFilter === "size"
+        ? a.fileSizeBytes - b.fileSizeBytes
+        : a.durationSecs - b.durationSecs
+    );
+  }, [items, sizeThresholdMb, durationThresholdSecs, activeFilter, showExcluded]);
 
   useEffect(() => {
     setSelectedIds((prev) => prev.filter((id) => filtered.some((item) => item.id === id)));
@@ -3203,11 +3268,18 @@ function VideoReviewView({
 
   function handleOpen(item: VideoReviewItem, index: number) {
     getOrSetVideoPreview(item);
-    if (item.durationSecs < 10) {
-      setInlinePlayingId(item.id);
-      return;
-    }
+    setInlinePlayingId(null);
     setModalIndex(index);
+  }
+
+  function handleHoverPlay(item: VideoReviewItem) {
+    if (inlinePlayingId === item.id) return;
+    getOrSetVideoPreview(item);
+    setInlinePlayingId(item.id);
+  }
+
+  function handleHoverStop() {
+    setInlinePlayingId(null);
   }
 
   async function handleExclude(ids: number[]) {
@@ -3364,14 +3436,22 @@ function VideoReviewView({
                         transition={{ delay: Math.min((startIndex + offset) * 0.05, 0.35), duration: 0.2 }}
                         style={{ flex: "1 1 0", minWidth: 0, position: "relative" }}
                       >
-                        {inlinePlayingId === item.id && previewSrc ? (
-                          <video data-testid={`video-inline-player-${item.id}`} src={previewSrc} autoPlay muted controls className="mediaTileVideoAsset" />
-                        ) : (
-                          <button data-testid={`video-open-${item.id}`} className="mediaTileOpen" onClick={() => handleOpen(item, startIndex + offset)}>
-                            <img className="mediaTileImage mediaTileImageVideo" src={thumbSrc} alt={item.filename} />
-                            <span data-testid={`video-play-overlay-${item.id}`} className="mediaTilePlayGlyph">▶</span>
-                          </button>
-                        )}
+                        <button
+                          data-testid={`video-open-${item.id}`}
+                          className="mediaTileOpen"
+                          onClick={() => handleOpen(item, startIndex + offset)}
+                          onMouseEnter={() => handleHoverPlay(item)}
+                          onMouseLeave={handleHoverStop}
+                        >
+                          {inlinePlayingId === item.id && previewSrc ? (
+                            <video data-testid={`video-inline-player-${item.id}`} src={previewSrc} autoPlay muted loop playsInline className="mediaTileVideoAsset" />
+                          ) : (
+                            <>
+                              <img className="mediaTileImage mediaTileImageVideo" src={thumbSrc} alt={item.filename} />
+                              <span data-testid={`video-play-overlay-${item.id}`} className="mediaTilePlayGlyph">▶</span>
+                            </>
+                          )}
+                        </button>
                         <div className="mediaTileOverlay">
                           <div className="mediaTileOverlayTop">
                             <button
@@ -3390,11 +3470,11 @@ function VideoReviewView({
                               </button>
                             )}
                           </div>
-                          <div className="mediaTileOverlayBottom">
-                            <strong className="truncateOneLine">{item.filename}</strong>
-                            <div className="mediaTileMeta truncateOneLine">{formatFileSize(item.fileSizeBytes)} • {formatDuration(item.durationSecs)}</div>
-                            {flagged ? <span className="mediaTileBadge">candidate</span> : null}
-                          </div>
+                        </div>
+                        <div className="mediaTileOverlayBottom">
+                          <strong className="truncateOneLine">{item.filename}</strong>
+                          <div className="mediaTileMeta truncateOneLine">{formatFileSize(item.fileSizeBytes)} • {formatDuration(item.durationSecs)}</div>
+                          {flagged ? <span className="mediaTileBadge">candidate</span> : null}
                         </div>
                         <span className="mediaTileDuration">{formatDuration(item.durationSecs)}</span>
                         {inlinePlayingId !== item.id ? (
@@ -3435,9 +3515,6 @@ function VideoReviewView({
             data-testid="video-done-proceed"
             className="primaryBtn"
             onClick={() => {
-              const groupedCount = items.length;
-              const ok = window.confirm(`${groupedCount} videos will continue to Date Enforcement. ${excludedCount} videos have been excluded. Proceed?`);
-              if (!ok) return;
               void onProceed();
             }}
           >

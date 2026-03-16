@@ -102,7 +102,6 @@ test.describe("Memoria desktop UI", () => {
     await page.getByTestId("image-done-proceed").click();
 
     await page.getByTestId("tab-videos").click();
-    page.once("dialog", (dialog) => dialog.accept());
     await page.getByTestId("video-done-proceed").click();
 
     await page.getByTestId("tab-dates").click();

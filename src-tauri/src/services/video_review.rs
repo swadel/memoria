@@ -32,7 +32,7 @@ pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Pat
 
     let mut video_count = 0_i64;
     for (idx, row) in all_rows.into_iter().enumerate() {
-        let (id, _filename, current_path, file_size, duration, width, height, codec) = row;
+        let (id, filename, current_path, file_size, duration, width, height, codec) = row;
         if current_path.trim().is_empty() {
             continue;
         }
@@ -67,7 +67,7 @@ pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Pat
         runtime_log::emit_pipeline_progress(
             app_handle,
             "video_prep",
-            &format!("Prepared video {}/{}", idx + 1, total),
+            &format!("Preparing: {}", filename),
             idx + 1,
             total,
         );
@@ -360,6 +360,15 @@ mod tests {
         let state = video_phase_state(&conn).expect("state");
         assert_eq!(state, "complete");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn video_prep_progress_detail_uses_filename_not_fraction() {
+        let filename = "clip_001.mov";
+        let detail = format!("Preparing: {}", filename);
+        assert!(detail.starts_with("Preparing: "));
+        assert!(detail.contains(filename));
+        assert!(!detail.contains('/'), "detail should not contain current/total fraction");
     }
 
     #[test]

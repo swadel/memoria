@@ -622,11 +622,59 @@ button:hover {
   flex-wrap: wrap;
 }
 
+.reviewHelpSection {
+  margin-bottom: 10px;
+}
+
+.reviewHelpToggle {
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.reviewHelpToggle:hover {
+  color: #374151;
+}
+
+.reviewHelpContent {
+  margin-top: 6px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.55;
+}
+
+.reviewHelpContent ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.reviewHelpContent li {
+  margin-bottom: 3px;
+}
+
+.reviewHelpContent p {
+  margin: 4px 0;
+}
+
 .mediaControlsStack {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-bottom: 8px;
+  max-width: 480px;
+}
+
+.mediaControlsStack input[type="range"] {
+  max-width: 400px;
 }
 
 .eventGroupCard {
@@ -822,7 +870,7 @@ button:hover {
   flex-direction: column;
   justify-content: space-between;
   padding: 8px;
-  background: linear-gradient(180deg, rgba(2, 6, 23, 0.5) 0%, rgba(2, 6, 23, 0) 38%, rgba(2, 6, 23, 0.75) 100%);
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.5) 0%, rgba(2, 6, 23, 0) 38%, transparent 100%);
   opacity: 0;
   transition: opacity 140ms ease;
   pointer-events: none;
@@ -840,16 +888,23 @@ button:hover {
 }
 
 .mediaTileOverlayBottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 24px 8px 8px;
+  background: linear-gradient(to top, rgba(2, 6, 23, 0.88) 0%, rgba(2, 6, 23, 0.6) 60%, transparent 100%);
   color: #f8fafc;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
 }
 
 .mediaTileMeta {
-  color: #f8fafc;
-  font-size: 12px;
+  color: #e2e8f0;
+  font-size: 13px;
 }
 
 .mediaTileBadges {
@@ -862,11 +917,12 @@ button:hover {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  padding: 2px 7px;
+  padding: 2px 8px;
   font-size: 11px;
-  background: rgba(147, 197, 253, 0.45);
-  color: #dbeafe;
+  background: rgba(147, 197, 253, 0.55);
+  color: #eff6ff;
   text-shadow: none;
+  backdrop-filter: blur(4px);
 }
 
 .mediaTileBadgeBest {
@@ -1029,6 +1085,16 @@ button:hover {
   object-fit: contain;
 }
 
+.dateThumbButton {
+  position: relative;
+  display: block;
+  border: none;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  width: 100%;
+}
+
 .dateThumb {
   width: 100%;
   max-width: 100%;
@@ -1037,6 +1103,17 @@ button:hover {
   border-radius: 12px;
   border: 1px solid rgba(0, 0, 0, 0.06);
   margin-bottom: 8px;
+}
+
+.dateThumbPlayGlyph {
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 28px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
 }
 
 .dateItemCard {

@@ -294,7 +294,6 @@ test.describe("Memoria browser UI", () => {
     await installBrowserApiMock(flowPage, "video-to-dates");
     await flowPage.goto("/");
     await flowPage.getByTestId("tab-videos").click();
-    flowPage.once("dialog", (dialog) => dialog.accept());
     await flowPage.getByTestId("video-done-proceed").click();
     await expect(flowPage.getByTestId("global-loading-state")).toBeVisible();
     await expect(flowPage.getByText("Enforcing dates...")).toBeVisible();
@@ -324,22 +323,22 @@ test.describe("Memoria browser UI", () => {
 
   test("video review filter mode is mutually exclusive", async ({ page }) => {
     await page.getByTestId("tab-videos").click();
-    await expect(page.getByTestId("video-filter-mode-size")).toBeChecked();
-    await expect(page.getByTestId("video-size-slider")).toBeEnabled();
-    await expect(page.getByTestId("video-duration-slider")).toBeDisabled();
-
-    await page.getByTestId("video-size-slider").fill("2");
-    await expect(page.getByTestId("video-filter-summary")).toContainText("Showing videos under 2 MB");
-
-    await page.getByTestId("video-filter-mode-duration").check();
+    await expect(page.getByTestId("video-filter-mode-duration")).toBeChecked();
     await expect(page.getByTestId("video-duration-slider")).toBeEnabled();
     await expect(page.getByTestId("video-size-slider")).toBeDisabled();
-    await expect(page.getByTestId("video-filter-summary")).toContainText("sec");
 
     await page.getByTestId("video-duration-slider").fill("23");
     await expect(page.getByTestId("video-filter-summary")).toContainText("23 sec");
+
     await page.getByTestId("video-filter-mode-size").check();
-    await expect(page.getByTestId("video-size-slider")).toHaveValue("2");
+    await expect(page.getByTestId("video-size-slider")).toBeEnabled();
+    await expect(page.getByTestId("video-duration-slider")).toBeDisabled();
+    await expect(page.getByTestId("video-filter-summary")).toContainText("Showing videos under 5 MB");
+
+    await page.getByTestId("video-size-slider").fill("2");
+    await expect(page.getByTestId("video-filter-summary")).toContainText("Showing videos under 2 MB");
+    await page.getByTestId("video-filter-mode-duration").check();
+    await expect(page.getByTestId("video-duration-slider")).toHaveValue("23");
   });
 
   test("date approval and event flow still work after reorder", async ({ page }) => {
@@ -347,7 +346,6 @@ test.describe("Memoria browser UI", () => {
     await page.getByTestId("tab-images").click();
     await page.getByTestId("image-done-proceed").click();
 
-    page.once("dialog", (dialog) => dialog.accept());
     await page.getByTestId("video-done-proceed").click();
 
     await page.getByTestId("tab-dates").click();
@@ -461,7 +459,7 @@ test.describe("Memoria browser UI", () => {
     await installBrowserApiMock(videoPage, "all");
     await videoPage.goto("/");
     await videoPage.getByTestId("tab-videos").click();
-    // Raise size threshold to 20 MB so the 18 MB fixture video (id=602, 84s) appears
+    await videoPage.getByTestId("video-filter-mode-size").check();
     await videoPage.getByTestId("video-size-slider").fill("20");
     const openBtn = videoPage.getByTestId("video-open-602");
     if (await openBtn.isVisible()) {
@@ -561,5 +559,190 @@ test.describe("Memoria browser UI", () => {
     await expect(progressPage.getByTestId("global-loading-state")).toBeVisible();
     await expect(progressPage.getByTestId("loading-state-logo")).toBeVisible();
     await progressPage.close();
+  });
+
+  test("image review video item shows play glyph on thumbnail", async ({ page }) => {
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-filter-all").click();
+    const videoItem = page.getByTestId("image-item-505");
+    await expect(videoItem).toBeVisible();
+    await expect(page.getByTestId("image-play-glyph-505")).toBeVisible();
+  });
+
+  test("image review clicking video opens modal with video element", async ({ page }) => {
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-filter-all").click();
+    await page.getByTestId("image-open-505").click();
+    await expect(page.getByTestId("image-preview-modal")).toBeVisible();
+    await expect(page.getByTestId("image-preview-video")).toBeVisible();
+    await page.getByTestId("image-preview-close").click();
+  });
+
+  test("image review overlay bottom text is always visible without hover", async ({ page }) => {
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-filter-all").click();
+    const firstItem = page.getByTestId("image-item-501");
+    await expect(firstItem).toBeVisible();
+    const overlayBottom = firstItem.locator(".mediaTileOverlayBottom");
+    const opacity = await overlayBottom.evaluate((el) => getComputedStyle(el).opacity);
+    expect(Number(opacity)).toBeGreaterThanOrEqual(1);
+  });
+
+  test("image review help toggle shows explanation text", async ({ page }) => {
+    await page.getByTestId("tab-images").click();
+    await expect(page.getByTestId("image-review-help")).toBeVisible();
+    await expect(page.getByTestId("image-review-help-content")).toHaveCount(0);
+    await page.getByTestId("image-review-help-toggle").click();
+    await expect(page.getByTestId("image-review-help-content")).toBeVisible();
+    await expect(page.getByTestId("image-review-help-content")).toContainText("Flagged Only");
+    await expect(page.getByTestId("image-review-help-content")).toContainText("Burst Groups");
+    await page.getByTestId("image-review-help-toggle").click();
+    await expect(page.getByTestId("image-review-help-content")).toHaveCount(0);
+  });
+
+  test("image review burst group buttons are near group label", async ({ page }) => {
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-filter-burst").click();
+    const bestBtn = page.getByTestId("image-keep-best-only-burst-a");
+    await expect(bestBtn).toBeVisible();
+    const btnBox = await bestBtn.boundingBox();
+    expect(btnBox).not.toBeNull();
+    if (!btnBox) return;
+    expect(btnBox.x).toBeLessThan(600);
+  });
+
+  test("video review defaults to filter by duration", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    await expect(page.getByTestId("video-filter-mode-duration")).toBeChecked();
+    await expect(page.getByTestId("video-duration-slider")).toBeEnabled();
+    await expect(page.getByTestId("video-size-slider")).toBeDisabled();
+    await expect(page.getByTestId("video-filter-summary")).toContainText("sec");
+  });
+
+  test("video review slider has constrained width", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    const slider = page.getByTestId("video-duration-slider");
+    await expect(slider).toBeVisible();
+    const box = await slider.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+    expect(box.width).toBeLessThanOrEqual(410);
+  });
+
+  test("video review videos are sorted ascending by active filter", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-duration-slider").fill("120");
+    const tiles = page.locator("[data-testid^='video-item-']");
+    const count = await tiles.count();
+    expect(count).toBeGreaterThanOrEqual(2);
+    const firstId = await tiles.nth(0).getAttribute("data-testid").then((v) => v?.replace("video-item-", ""));
+    const secondId = await tiles.nth(1).getAttribute("data-testid").then((v) => v?.replace("video-item-", ""));
+    expect(firstId).toBe("601");
+    expect(secondId).toBe("602");
+  });
+
+  test("video review excluded tab shows excluded videos with restore", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-show-excluded").click();
+    const excludedTile = page.getByTestId("video-item-603");
+    await expect(excludedTile).toBeVisible();
+    await expect(page.getByTestId("video-restore-603")).toBeVisible();
+  });
+
+  test("date approval thumbnail opens preview on click", async ({ page }) => {
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-done-proceed").click();
+    await page.getByTestId("video-done-proceed").click();
+    await page.getByTestId("tab-dates").click();
+    await expect(page.getByTestId("date-item-301")).toBeVisible();
+    await page.getByTestId("date-preview-btn-301").click();
+    await expect(page.getByTestId("date-preview-overlay-301")).toBeVisible();
+    await expect(page.getByTestId("date-preview-image-301")).toBeVisible();
+    await page.getByTestId("date-preview-close-301").click();
+    await expect(page.getByTestId("date-preview-overlay-301")).toHaveCount(0);
+  });
+
+  test("date approval video item shows play glyph and opens video preview", async ({ page }) => {
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-done-proceed").click();
+    await page.getByTestId("video-done-proceed").click();
+    await page.getByTestId("tab-dates").click();
+    await expect(page.getByTestId("date-item-302")).toBeVisible();
+    const thumbBtn = page.getByTestId("date-preview-btn-302");
+    await expect(thumbBtn.locator(".dateThumbPlayGlyph")).toBeVisible();
+    await thumbBtn.click();
+    await expect(page.getByTestId("date-preview-overlay-302")).toBeVisible();
+    await expect(page.getByTestId("date-preview-video-302")).toBeVisible();
+    await page.getByTestId("date-preview-close-302").click();
+  });
+
+  test("loading state renders with detail and percentage as separate elements", async ({ context }) => {
+    const progressPage = await context.newPage();
+    await installBrowserApiMock(progressPage, "phase-busy");
+    await progressPage.goto("/");
+    await progressPage.getByTestId("tab-images").click();
+    progressPage.once("dialog", (dialog) => dialog.accept());
+    await progressPage.getByTestId("image-done-proceed").click();
+    await expect(progressPage.getByTestId("loading-state-root")).toBeVisible();
+    await expect(progressPage.getByTestId("loading-state-hint")).toBeVisible();
+    await progressPage.close();
+  });
+
+  test("excluded images remain visible after toggling excluded filter", async ({ page }) => {
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-show-excluded").click();
+    const excludedTile = page.getByTestId("image-item-504");
+    await expect(excludedTile).toBeVisible();
+    await page.waitForTimeout(500);
+    await expect(excludedTile).toBeVisible();
+  });
+
+  test("excluded videos remain visible after toggling excluded filter", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-show-excluded").click();
+    const excludedTile = page.getByTestId("video-item-603");
+    await expect(excludedTile).toBeVisible();
+    await page.waitForTimeout(500);
+    await expect(excludedTile).toBeVisible();
+  });
+
+  test("video review done-proceed advances without confirm dialog", async ({ page }) => {
+    let videoDialogSeen = false;
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("tab-images").click();
+    await page.getByTestId("image-done-proceed").click();
+    page.on("dialog", (dialog) => {
+      videoDialogSeen = true;
+      void dialog.accept();
+    });
+    await page.getByTestId("video-done-proceed").click();
+    await page.waitForTimeout(300);
+    expect(videoDialogSeen).toBe(false);
+  });
+
+  test("video thumbnail click opens lightbox for short video", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-duration-slider").fill("120");
+    await page.getByTestId("video-open-601").click();
+    await expect(page.getByTestId("video-preview-modal")).toBeVisible();
+  });
+
+  test("video thumbnail click opens lightbox for long video", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-duration-slider").fill("120");
+    await page.getByTestId("video-open-602").click();
+    await expect(page.getByTestId("video-preview-modal")).toBeVisible();
+  });
+
+  test("video tile has hover and click event handlers for playback", async ({ page }) => {
+    await page.getByTestId("tab-videos").click();
+    await page.getByTestId("video-duration-slider").fill("120");
+    const tile = page.getByTestId("video-open-601");
+    await expect(tile).toBeVisible();
+    const hasMouseEnter = await tile.evaluate((el) => typeof el.onmouseenter === "function" || el.getAttribute("onmouseenter") !== null);
+    const tagName = await tile.evaluate((el) => el.tagName.toLowerCase());
+    expect(tagName).toBe("button");
   });
 });

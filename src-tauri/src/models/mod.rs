@@ -30,6 +30,8 @@ pub struct DateEstimateDto {
     pub ai_date: Option<String>,
     pub confidence: f64,
     pub reasoning: String,
+    pub mime_type: String,
+    pub current_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

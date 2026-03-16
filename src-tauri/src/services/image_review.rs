@@ -5,8 +5,6 @@ use rayon::prelude::*;
 use rusqlite::params;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tauri::Emitter;
-
 use crate::db;
 use crate::services::{ai_client::AiClient, exiftool, image_analysis, runtime_log};
 
@@ -126,7 +124,7 @@ pub async fn run_image_review_scan(
     }
 
     // Phase 1: Parallel local analysis via rayon
-    emit_progress(app_handle, "analyzing", 0, total);
+    runtime_log::emit_pipeline_progress(app_handle, "image_review", "Starting image analysis...", 0, total);
     let progress_counter = AtomicUsize::new(0);
     let app_handle_clone = app_handle.cloned();
 
@@ -147,7 +145,13 @@ pub async fn run_image_review_scan(
 
             let done = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
             if done % 50 == 0 || done == total {
-                emit_progress(app_handle_clone.as_ref(), "analyzing", done, total);
+                runtime_log::emit_pipeline_progress(
+                    app_handle_clone.as_ref(),
+                    "image_review",
+                    &format!("Analyzing image {done}/{total}"),
+                    done,
+                    total,
+                );
             }
 
             AnalysisResult {
@@ -182,7 +186,7 @@ pub async fn run_image_review_scan(
         .collect();
 
     // Phase 2: Deterministic grouping
-    emit_progress(app_handle, "grouping", 0, 0);
+    runtime_log::emit_pipeline_progress(app_handle, "image_review", "Grouping bursts and duplicates...", 0, 0);
 
     let mut burst_map = detect_burst_groups(&analyzed, &settings);
     let duplicate_map = detect_duplicate_groups(&analyzed, &burst_map, &settings);
@@ -207,13 +211,13 @@ pub async fn run_image_review_scan(
 
         if !borderline_items.is_empty() {
             let bl_total = borderline_items.len();
-            emit_progress(app_handle, "ai_fallback", 0, bl_total);
+            runtime_log::emit_pipeline_progress(app_handle, "image_review", "AI quality assessment...", 0, bl_total);
             for (i, (id, path)) in borderline_items.iter().enumerate() {
                 if let Ok(assessment) = ai.assess_image_quality(path).await {
                     ai_blur_overrides.insert(*id, assessment.is_blurry);
                     ai_quality_scores.insert(*id, (assessment.quality_score, assessment.reasoning));
                 }
-                emit_progress(app_handle, "ai_fallback", i + 1, bl_total);
+                runtime_log::emit_pipeline_progress(app_handle, "image_review", &format!("AI quality check {}/{bl_total}", i + 1), i + 1, bl_total);
             }
         }
 
@@ -385,7 +389,7 @@ pub async fn run_image_review_scan(
         )?;
     }
 
-    emit_progress(app_handle, "complete", total, total);
+    runtime_log::emit_pipeline_progress(app_handle, "image_review", "Image review complete", total, total);
 
     let remaining_flagged: i64 = conn.query_row(
         "SELECT COUNT(*) FROM media_items
@@ -598,25 +602,7 @@ fn union_ids(uf: &mut HashMap<i64, i64>, a: i64, b: i64) {
     }
 }
 
-// --- Progress reporting ---
-
-fn emit_progress(
-    app_handle: Option<&tauri::AppHandle>,
-    phase: &str,
-    current: usize,
-    total: usize,
-) {
-    if let Some(handle) = app_handle {
-        let _ = handle.emit(
-            "image-review-progress",
-            serde_json::json!({ "phase": phase, "current": current, "total": total }),
-        );
-    }
-    runtime_log::info(
-        "image_review",
-        format!("progress: phase={phase} current={current} total={total}"),
-    );
-}
+// --- Progress reporting (delegates to runtime_log::emit_pipeline_progress) ---
 
 // --- Helpers ---
 

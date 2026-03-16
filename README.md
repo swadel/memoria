@@ -45,17 +45,23 @@ The folder structure Memoria produces looks like this:
 - Auto-flags low-quality/candidate images (`small_file`, `blurry`, `burst_shot`)
 - Detects burst groups and auto-selects a best frame (`is_burst_primary`)
 - Supports filtered review, bulk/individual exclude, restore, and burst actions (`Keep Best Only`, `Keep All`)
+- Video files in the review set display a play glyph overlay; clicking opens a video player in the preview modal
+- Collapsible **"How does this work?"** guide explains every filter (Active, Excluded, All Images, Flagged Only, Burst Groups, Duplicates, Screenshots) and the sort dropdown
+- Tile info overlay (filename, size, date, badges) is always visible at the bottom of each card for readability
 - Image Review completion advances remaining active items to `image_reviewed`
 - Completion shows a busy overlay and transitions directly into Video Review
 
 ### Video Review (Pre-Date-Enforcement)
 - Dedicated Video Review phase between Image Review and Date Enforcement
 - Reviews all `video/*` items in `image_reviewed` state with file size and duration metadata
-- Mutually exclusive filters (`Filter by Size` or `Filter by Duration`)
+- Mutually exclusive filters (`Filter by Size` or `Filter by Duration`); defaults to **Filter by Duration**
+- Videos are sorted ascending by the active filter criterion (shortest-first for duration, smallest-first for size)
+- Slider controls are width-constrained for a cleaner layout
 - Inline preview behavior:
   - short clips can play inline
   - longer clips open a modal/lightbox with full controls
 - Exclude actions move files to `/recycle/` with `status='excluded'` and audit log entries
+- **Excluded tab** properly displays excluded videos and allows restoring them back to active review
 - Completing Video Review advances remaining active items to `video_reviewed`
 - Proceeding from Video Review immediately runs Date Enforcement (with loading UI) and lands on Date Approval
 - Excluded videos are not included in downstream phases until restored
@@ -66,8 +72,10 @@ Amazon Photos, Google Photos, and most photo management tools order images by th
 Memoria checks every `video_reviewed` item. If `DateTimeOriginal` is missing or invalid (for example `1970:01:01`), it:
 1. Flags the item with `date_needs_review=1`
 2. Uses AI to estimate a likely date with confidence and reasoning
-3. Displays the item in Date Approval with a thumbnail preview
+3. Displays the item in Date Approval with a clickable thumbnail that opens a full-size preview (images) or video player (videos)
 4. Writes approved dates back to metadata only after user action
+
+When AI estimation fails (no API key, service unavailable, or unreadable image), Memoria returns `ai_date: null` with a clear "AI could not determine date" message — the user can enter a date manually via the date input. Previous versions incorrectly returned a hardcoded fallback date.
 
 All metadata changes are logged to a full audit trail.
 
@@ -108,7 +116,7 @@ Memoria uses a configurable multi-model AI pipeline with five independently conf
 Supported providers: **OpenAI** and **Anthropic**. Each slot can be configured with any provider/model combination.
 
 When AI is unavailable, all flows have offline fallbacks:
-- Date estimation uses file metadata and visual cues
+- Date estimation returns a clear "could not determine date" message with zero confidence, allowing the user to enter a date manually
 - Event naming falls back to location-aware or date-based names (e.g., "Nashville Trip" or "March Activities") instead of generic labels
 
 ### Home Location
@@ -132,12 +140,15 @@ An optional Home Location setting enables home-vs-away detection for smarter eve
 ### Busy-State Feedback
 - Global loading overlays appear during major phase work:
   - Indexing
+  - Image Review scan (analysis + grouping)
   - Image Review completion handoff
   - Video include/exclude updates
   - Date Enforcement
   - Event Group generation
   - Finalize
 - Loading copy is phase-specific so users always see what operation is running
+- Every loading screen displays a **progress bar** with current/total counts and a description of the item being processed (e.g., "Analyzing image 50/139", "Preparing video 3/15")
+- Progress is driven by real-time `pipeline-progress` events emitted from the Rust backend
 
 ### Event Group Review and Reassignment
 - Event Group cards are clickable and open a dedicated detail view for that group
@@ -262,8 +273,8 @@ npm run tauri dev
 npm run lint             # TypeScript type checks
 npm run build            # Frontend build (tsc + vite)
 npm run check:rust       # Rust compile check
-npm run test:rust        # Rust unit tests (79 tests)
-npm run test:ui:browser  # Browser E2E suite (Playwright, Chromium)
+npm run test:rust        # Rust unit tests (99 tests)
+npm run test:ui:browser  # Browser E2E suite (Playwright, Chromium, 47 tests)
 npm run test:ui:desktop  # Desktop E2E suite (Playwright, real Tauri app)
 npm run test:ui          # All Playwright projects
 npm run test:ui:headed   # Playwright in headed mode (debugging)
@@ -363,14 +374,17 @@ memoria/
         date_enforcer.rs  #   Date metadata enforcement
         file_organizer.rs #   File copy/move operations
         exiftool.rs       #   Exiftool/ffmpeg integration
+        image_analysis.rs #   Blur scoring, perceptual hashing, exposure/screenshot detection
         image_review.rs   #   Image flagging, burst detection
         video_review.rs   #   Video review logic
         settings.rs       #   Secret/credential storage
-        runtime_log.rs    #   Runtime logging
+        runtime_log.rs    #   Runtime logging, pipeline progress event emission
       db/                 # SQLite schema, migrations, queries
   src/                    # React frontend
     App.tsx               # Main UI (Dashboard, Reviews, Date Approval, Events, Settings)
+    components/UI/        # Reusable UI components (LoadingState with progress bar)
     lib/api.ts            # Tauri invoke wrappers and type contracts
+    types.ts              # Shared TypeScript interfaces
     styles.css            # Application styles
   sidecar/                # Optional Python iCloud bridge
   tests/

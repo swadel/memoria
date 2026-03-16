@@ -187,23 +187,32 @@ impl AiClient {
 
     pub async fn estimate_date(&self, filename: &str, image_path: Option<&str>) -> Result<DateEstimate> {
         if let Some(path) = image_path {
-            if let Ok(result) = self
-                .estimate_date_via_config(path, &self.routing.date_estimation)
-                .await
-            {
-                return Ok(result);
+            match self.estimate_date_via_config(path, &self.routing.date_estimation).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    crate::services::runtime_log::warn(
+                        "ai_client",
+                        format!("Primary date estimation failed for {filename}: {e}"),
+                    );
+                }
             }
             if let Some(fallback_config) = self.routing.date_estimation_fallback.as_ref() {
-                if let Ok(result) = self.estimate_date_via_config(path, fallback_config).await {
-                    return Ok(result);
+                match self.estimate_date_via_config(path, fallback_config).await {
+                    Ok(result) => return Ok(result),
+                    Err(e) => {
+                        crate::services::runtime_log::warn(
+                            "ai_client",
+                            format!("Fallback date estimation failed for {filename}: {e}"),
+                        );
+                    }
                 }
             }
         }
 
         Ok(DateEstimate {
-            ai_date: Some("2025-12-25".to_string()),
-            confidence: 0.62,
-            reasoning: format!("Estimated from visual seasonal cues for {filename}."),
+            ai_date: None,
+            confidence: 0.0,
+            reasoning: format!("Could not estimate date for {filename}: AI service unavailable or image unreadable."),
         })
     }
 
@@ -1380,15 +1389,20 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn estimate_date_and_event_name_have_local_fallbacks() {
+    async fn estimate_date_returns_none_when_ai_unavailable() {
         let ai = AiClient::new(None, None, AiRoutingConfig::default());
         let date = ai
             .estimate_date("IMG_2001.JPG", None)
             .await
             .expect("estimate date");
-        assert_eq!(date.ai_date.as_deref(), Some("2025-12-25"));
-        assert!(date.confidence > 0.0);
+        assert_eq!(date.ai_date, None);
+        assert!((date.confidence - 0.0).abs() < f64::EPSILON);
+        assert!(date.reasoning.contains("Could not estimate date"));
+    }
 
+    #[tokio::test]
+    async fn event_name_has_local_fallback() {
+        let ai = AiClient::new(None, None, AiRoutingConfig::default());
         let event = ai
             .suggest_event_name(2026, 12)
             .await

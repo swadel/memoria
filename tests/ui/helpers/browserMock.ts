@@ -23,6 +23,8 @@ type DateEstimate = {
   aiDate: string | null;
   confidence: number;
   reasoning: string;
+  mimeType: string;
+  currentPath: string | null;
 };
 
 type EventGroup = {
@@ -94,15 +96,19 @@ function buildState(profile: BrowserFixtureProfile) {
             currentDate: null,
             aiDate: "2026-03-11",
             confidence: 0.82,
-            reasoning: "Fixture seeded date estimate"
+            reasoning: "Fixture seeded date estimate",
+            mimeType: "image/png",
+            currentPath: "C:\\fixture\\output\\staging\\date_review_fixture.png"
           },
           {
             mediaItemId: 302,
-            filename: "date_review_fixture_2.png",
+            filename: "date_review_fixture_2.mov",
             currentDate: null,
             aiDate: "2026-03-12",
             confidence: 0.79,
-            reasoning: "Fixture seeded date estimate 2"
+            reasoning: "Fixture seeded date estimate 2",
+            mimeType: "video/quicktime",
+            currentPath: "C:\\fixture\\output\\staging\\date_review_fixture_2.mov"
           }
         ];
 
@@ -261,6 +267,25 @@ function buildState(profile: BrowserFixtureProfile) {
       aiQualityScore: null,
       aiContentClass: null,
       imageFlags: ["blurry"],
+      status: "indexed"
+    },
+    {
+      id: 505,
+      filename: "clip_review.mov",
+      currentPath: "C:\\fixture\\output\\staging\\clip_review.mov",
+      dateTaken: "2026-03-02 12:00:00",
+      mimeType: "video/quicktime",
+      fileSizeBytes: 2_400_000,
+      sharpnessScore: null,
+      blurScore: null,
+      perceptualHash: null,
+      burstGroupId: null,
+      isBurstPrimary: false,
+      duplicateGroupId: null,
+      exposureMean: null,
+      aiQualityScore: null,
+      aiContentClass: null,
+      imageFlags: [],
       status: "indexed"
     },
     {
@@ -571,7 +596,9 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                     currentDate: null,
                     aiDate: "2026-05-11",
                     confidence: 0.86,
-                    reasoning: "Fixture created after date enforcement"
+                    reasoning: "Fixture created after date enforcement",
+                    mimeType: "image/jpeg",
+                    currentPath: "C:\\fixture\\output\\staging\\date_needed_after_video_1.jpg"
                   },
                   {
                     mediaItemId: 3302,
@@ -579,7 +606,9 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
                     currentDate: null,
                     aiDate: "2026-05-12",
                     confidence: 0.81,
-                    reasoning: "Fixture created after date enforcement"
+                    reasoning: "Fixture created after date enforcement",
+                    mimeType: "image/jpeg",
+                    currentPath: "C:\\fixture\\output\\staging\\date_needed_after_video_2.jpg"
                   }
                 ];
                 state.stats = {

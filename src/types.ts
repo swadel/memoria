@@ -105,4 +105,6 @@ export interface DateEstimate {
   aiDate: string | null;
   confidence: number;
   reasoning: string;
+  mimeType: string;
+  currentPath: string | null;
 }

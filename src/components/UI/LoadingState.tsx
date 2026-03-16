@@ -29,10 +29,10 @@ export const LoadingState: React.FC<LoadingStateProps> = ({
         <p className="text-lg font-medium text-slate-700 animate-in fade-in slide-in-from-bottom-2">{message}</p>
         <p className="text-sm text-slate-500" data-testid="loading-state-hint">{hint}</p>
         {progress && (
-          <div className="w-full" data-testid="loading-state-progress">
-            <div className="flex justify-between text-xs text-slate-500 mb-1">
-              <span className="truncate max-w-[200px]" data-testid="loading-state-progress-detail">{progress.detail}</span>
-              {pct !== null && <span data-testid="loading-state-progress-pct">{pct}%</span>}
+          <div className="w-full" style={{ minWidth: 260 }} data-testid="loading-state-progress">
+            <div className="flex items-baseline justify-between gap-3 text-xs text-slate-500 mb-1">
+              <span className="truncate min-w-0" data-testid="loading-state-progress-detail">{progress.detail}</span>
+              {pct !== null && <span className="whitespace-nowrap flex-shrink-0 font-medium" data-testid="loading-state-progress-pct">{pct}%</span>}
             </div>
             <div className="w-full h-1.5 rounded-full bg-slate-200 overflow-hidden">
               <div
@@ -42,7 +42,7 @@ export const LoadingState: React.FC<LoadingStateProps> = ({
               />
             </div>
             {progress.total > 0 && (
-              <p className="text-xs text-slate-400 mt-1 text-center" data-testid="loading-state-progress-count">
+              <p className="text-xs text-slate-400 mt-1.5 text-center" data-testid="loading-state-progress-count">
                 {progress.current} of {progress.total}
               </p>
             )}

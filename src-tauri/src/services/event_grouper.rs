@@ -293,6 +293,7 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
         );
 
         let mut queue = clusters;
+        let mut cluster_total = queue.len();
         let mut cluster_idx = 0_usize;
         while let Some(cluster) = queue.pop() {
             cluster_idx += 1;
@@ -301,7 +302,7 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
                 "event_grouping",
                 &format!("Naming group {cluster_idx} for {year}..."),
                 cluster_idx,
-                cluster_idx,
+                cluster_total,
             );
             let outcome = name_cluster(year, &cluster, ai, &http, &mut geocoder, conn, home_config.as_ref()).await?;
             let naming = outcome.suggestion;
@@ -326,6 +327,7 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
                             cluster.len()
                         ),
                     );
+                    cluster_total += split.len();
                     for part in split {
                         queue.push(part);
                     }
@@ -1151,7 +1153,6 @@ mod tests {
 
     #[test]
     fn location_consistency_enum_values() {
-        // This test ensures the standardized enum values
         let valid_values = ["consistent", "mixed", "none"];
         for val in valid_values {
             assert!(
@@ -1159,5 +1160,55 @@ mod tests {
                 "{val} is not a valid location_consistency value"
             );
         }
+    }
+
+    #[test]
+    fn cluster_progress_tracks_correct_total_with_splits() {
+        let items = vec![
+            item(1, "2026-01-01 10:00:00", "a.jpg"),
+            item(2, "2026-01-02 10:00:00", "b.jpg"),
+            item(3, "2026-01-10 10:00:00", "c.jpg"),
+            item(4, "2026-01-11 10:00:00", "d.jpg"),
+        ];
+        let clusters = cluster_by_days(items, 2);
+        assert_eq!(clusters.len(), 2);
+
+        let mut queue = clusters;
+        let mut cluster_total = queue.len();
+        let mut cluster_idx = 0_usize;
+        while let Some(_cluster) = queue.pop() {
+            cluster_idx += 1;
+            assert!(cluster_idx <= cluster_total, "current should not exceed total");
+        }
+        assert_eq!(cluster_idx, cluster_total);
+    }
+
+    #[test]
+    fn cluster_progress_total_updates_on_split() {
+        let mut queue: Vec<Vec<ClusterItem>> = vec![
+            vec![item(1, "2026-01-01", "a.jpg")],
+            vec![item(2, "2026-01-10", "b.jpg"), item(3, "2026-01-20", "c.jpg")],
+        ];
+        let mut cluster_total = queue.len(); // 2
+        let mut cluster_idx = 0_usize;
+        let mut named_count = 0_usize;
+
+        while let Some(cluster) = queue.pop() {
+            cluster_idx += 1;
+            assert!(cluster_idx <= cluster_total, "current ({cluster_idx}) must not exceed total ({cluster_total})");
+            if cluster.len() > 1 {
+                let split = split_cluster_at_largest_gap(&cluster);
+                if split.len() > 1 {
+                    cluster_total += split.len();
+                    for part in split {
+                        queue.push(part);
+                    }
+                    continue;
+                }
+            }
+            named_count += 1;
+        }
+        assert_eq!(cluster_total, 4);
+        assert_eq!(named_count, 3);
     }
 }

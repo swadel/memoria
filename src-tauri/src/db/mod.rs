@@ -253,7 +253,7 @@ pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
 
 pub fn get_date_review_queue(conn: &Connection) -> Result<Vec<DateEstimateDto>> {
     let mut stmt = conn.prepare(
-        "SELECT id, filename, date_taken, ai_date_estimate_raw
+        "SELECT id, filename, date_taken, ai_date_estimate_raw, COALESCE(mime_type, ''), current_path
          FROM media_items WHERE date_needs_review=1 ORDER BY id ASC",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -278,6 +278,8 @@ pub fn get_date_review_queue(conn: &Connection) -> Result<Vec<DateEstimateDto>> 
             ai_date,
             confidence,
             reasoning,
+            mime_type: row.get(4)?,
+            current_path: row.get(5)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -698,12 +700,13 @@ mod tests {
         let conn = init_db(&db_path).expect("db init");
 
         conn.execute(
-            "INSERT INTO media_items(icloud_id, filename, current_path, status, date_needs_review, ai_date_estimate_raw)
-             VALUES(?1, ?2, ?3, 'image_reviewed', 1, ?4)",
+            "INSERT INTO media_items(icloud_id, filename, current_path, mime_type, status, date_needs_review, ai_date_estimate_raw)
+             VALUES(?1, ?2, ?3, ?4, 'image_reviewed', 1, ?5)",
             [
                 "d1",
                 "IMG_DATE.JPG",
                 r"C:\tmp\IMG_DATE.JPG",
+                "image/jpeg",
                 r#"{"ai_date":"2026-03-10","confidence":0.88,"reasoning":"Fixture"}"#,
             ],
         )
@@ -715,6 +718,8 @@ mod tests {
         assert_eq!(item.ai_date.as_deref(), Some("2026-03-10"));
         assert!((item.confidence - 0.88).abs() < f64::EPSILON);
         assert_eq!(item.reasoning, "Fixture");
+        assert_eq!(item.mime_type, "image/jpeg");
+        assert_eq!(item.current_path.as_deref(), Some(r"C:\tmp\IMG_DATE.JPG"));
 
         drop(conn);
         let _ = fs::remove_file(db_path);
