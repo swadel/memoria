@@ -842,6 +842,12 @@ export function App() {
                 }}
               />
             </div>
+            <div className="flex justify-center gap-6 text-sm text-slate-500 py-2">
+              <span data-testid="stat-total">{stats.total}</span>
+              <span data-testid="stat-indexed">{stats.indexed}</span>
+              <span data-testid="stat-grouped">{stats.grouped}</span>
+              <span data-testid="stat-date-review">{stats.dateNeedsReview}</span>
+            </div>
             <div className="row dashboardResetRow">
               <button
                 data-testid="pipeline-reset-session"

@@ -18,11 +18,11 @@ test.describe("Memoria browser UI", () => {
 
     await expect(page.getByTestId("stat-image-review")).toHaveCount(0);
     await expect(page.getByTestId("stat-image-verified")).toHaveCount(0);
-    await expect(page.getByTestId("stat-date-review")).toHaveCount(0);
+    await expect(page.getByTestId("stat-date-review")).toBeVisible();
     await expect(page.getByTestId("stat-date-verified")).toHaveCount(0);
-    await expect(page.getByTestId("stat-total")).toHaveCount(0);
-    await expect(page.getByTestId("stat-indexed")).toHaveCount(0);
-    await expect(page.getByTestId("stat-grouped")).toHaveCount(0);
+    await expect(page.getByTestId("stat-total")).toBeVisible();
+    await expect(page.getByTestId("stat-indexed")).toBeVisible();
+    await expect(page.getByTestId("stat-grouped")).toBeVisible();
     await expect(page.getByTestId("stat-filed")).toHaveCount(0);
     await expect(page.getByTestId("stat-errors")).toHaveCount(0);
     await expect(page.getByTestId("dashboard-video-review-tile")).toHaveCount(0);
