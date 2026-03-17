@@ -738,10 +738,6 @@ export function App() {
   }
 
   async function onDeleteGroup(group: EventGroup) {
-    const confirmed = window.confirm(`Delete ${group.name}? This cannot be undone.`);
-    if (!confirmed) {
-      return;
-    }
     setBusyAction(`delete-group-${group.id}`);
     try {
       await deleteEventGroup(group.id);
