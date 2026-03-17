@@ -44,7 +44,6 @@ test.describe("Memoria desktop UI", () => {
     const createdCard = page.locator("[data-testid^='event-group-']").filter({ hasText: "Desktop New Group" });
     await expect(createdCard).toContainText("0 items");
 
-    page.once("dialog", (dialog) => dialog.accept());
     await createdCard.getByRole("button", { name: "Delete" }).click();
     await expect(createdCard).toHaveCount(0);
 

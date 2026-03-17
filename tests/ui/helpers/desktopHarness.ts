@@ -80,25 +80,27 @@ export class DesktopHarness {
       return newPage;
     }
 
-    const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
-    this.appProcess = spawn(npmBin, ["run", "tauri", "dev"], {
-      cwd: process.cwd(),
-      shell: true,
-      env: withCargoInPath({
-        ...process.env,
-        MEMORIA_APP_DIR: this.appDir,
-        VITE_E2E_DISABLE_POLLING: "1",
-        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${this.cdpPort}`
-      }),
-      stdio: "pipe"
-    });
-    this.appLogs = "";
-    this.appProcess.stdout.on("data", (chunk) => {
-      this.appLogs += chunk.toString();
-    });
-    this.appProcess.stderr.on("data", (chunk) => {
-      this.appLogs += chunk.toString();
-    });
+    if (!this.appProcess || this.appProcess.exitCode !== null) {
+      const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
+      this.appProcess = spawn(npmBin, ["run", "tauri", "dev"], {
+        cwd: process.cwd(),
+        shell: true,
+        env: withCargoInPath({
+          ...process.env,
+          MEMORIA_APP_DIR: this.appDir,
+          VITE_E2E_DISABLE_POLLING: "1",
+          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${this.cdpPort}`
+        }),
+        stdio: "pipe"
+      });
+      this.appLogs = "";
+      this.appProcess.stdout.on("data", (chunk) => {
+        this.appLogs += chunk.toString();
+      });
+      this.appProcess.stderr.on("data", (chunk) => {
+        this.appLogs += chunk.toString();
+      });
+    }
 
     await this.waitForCdp();
     this.browser = await chromium.connectOverCDP(`http://127.0.0.1:${this.cdpPort}`);
@@ -127,7 +129,8 @@ export class DesktopHarness {
   }
 
   private async waitForCdp() {
-    for (let i = 0; i < 140; i += 1) {
+    const maxAttempts = process.env.CI ? 480 : 140;
+    for (let i = 0; i < maxAttempts; i += 1) {
       try {
         const response = await fetch(`http://127.0.0.1:${this.cdpPort}/json/version`);
         if (response.ok) {
