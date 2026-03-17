@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { DesktopHarness } from "../helpers/desktopHarness";
 
 test.describe.configure({ mode: "serial" });
@@ -143,8 +143,8 @@ test.describe("Memoria desktop UI", () => {
     await expect(page.getByTestId("status-pill")).toContainText("Removed");
     await expect(page.getByTestId("tab-settings")).toBeVisible();
 
-    expect(existsSync(stagingDir)).toBeFalsy();
-    expect(existsSync(organizedDir)).toBeFalsy();
-    expect(existsSync(recycleDir)).toBeFalsy();
+    expect(readdirSync(stagingDir).length).toBe(0);
+    expect(readdirSync(organizedDir).length).toBe(0);
+    expect(readdirSync(recycleDir).length).toBe(0);
   });
 });
