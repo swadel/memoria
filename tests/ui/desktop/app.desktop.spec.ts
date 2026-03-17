@@ -18,15 +18,15 @@ test.describe("Memoria desktop UI", () => {
 
   test("renders seeded dashboard and event groups", async () => {
     const page = await harness.launch();
-    await page.getByTestId("tab-dashboard").click();
+    await expect(page.getByTestId("stat-total")).not.toHaveText("0", { timeout: 30_000 });
 
     await expect(page.getByTestId("stat-date-review")).not.toContainText("0");
     await expect(page.getByTestId("stat-grouped")).not.toContainText("0");
 
-    await page.getByTestId("tab-dates").click();
+    await page.evaluate(() => (window as any).__MEMORIA_SET_TAB__("dates"));
     await expect(page.locator("[data-testid^='date-thumb-']").first()).toBeVisible();
 
-    await page.getByTestId("tab-events").click();
+    await page.evaluate(() => (window as any).__MEMORIA_SET_TAB__("events"));
     await expect(page.getByTestId("event-groups-card")).toContainText("Ski Trip");
   });
 

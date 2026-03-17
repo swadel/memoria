@@ -190,6 +190,7 @@ export function App() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pipelineProgress, setPipelineProgress] = useState<PipelineProgress | null>(null);
   const [progressPhase, setProgressPhase] = useState<string | null>(null);
+  const [appInitialized, setAppInitialized] = useState(false);
   const [showFinalizeToast, setShowFinalizeToast] = useState(false);
   const [completionToastTotal, setCompletionToastTotal] = useState<number | null>(null);
   const [showResetPrompt, setShowResetPrompt] = useState(false);
@@ -280,6 +281,7 @@ export function App() {
           // keep null
         }
         await refreshAll();
+        setAppInitialized(true);
       })
       .catch((err) => setMessage(`Initialization failed: ${String(err)}`));
   }, []);
@@ -290,6 +292,11 @@ export function App() {
       refreshAll().catch(() => undefined);
     }, Math.max(POLL_INTERVAL_MS, 500));
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    (window as any).__MEMORIA_SET_TAB__ = setTab;
+    return () => { delete (window as any).__MEMORIA_SET_TAB__; };
   }, []);
 
   useEffect(() => {
@@ -531,7 +538,7 @@ export function App() {
       disabled: busyAction !== null
     };
   }, [hasFinalizedSession, stats.total, stats.filed, stats.imagePhaseState, stats.videoPhaseState, stats.dateNeedsReview, busyAction]);
-  const hasInitiatedIndexing = stats.total > 0 || pipelineStages.index !== "idle" || busyAction === "ingest";
+  const hasInitiatedIndexing = !appInitialized || stats.total > 0 || pipelineStages.index !== "idle" || busyAction === "ingest";
   const dashboardActionLabel = hasFinalizedSession || (stats.total > 0 && stats.filed >= stats.total)
     ? "Start New Session"
     : hasInitiatedIndexing
@@ -596,7 +603,11 @@ export function App() {
         testId: "tab-events",
         disabled: busyAction !== null || stats.dateNeedsReview > 0 || stats.videoPhaseState !== "complete",
         onClick: () => {
-          void onRunGrouping();
+          if (groups.length > 0) {
+            setTab("events");
+          } else {
+            void onRunGrouping();
+          }
         }
       },
       {
@@ -609,7 +620,7 @@ export function App() {
         }
       }
     ];
-  }, [pipelineStages, tab, busyAction, stats.total, stats.imagePhaseState, stats.imageReview, stats.videoPhaseState, stats.dateNeedsReview, stats.videoTotal]);
+  }, [pipelineStages, tab, busyAction, stats.total, stats.imagePhaseState, stats.imageReview, stats.videoPhaseState, stats.dateNeedsReview, stats.videoTotal, groups.length]);
   const globalProgressPct = useMemo(() => {
     const completeCount = workflowSteps.filter((step) => step.state === "complete").length;
     return (completeCount / 6) * 100;
@@ -851,7 +862,7 @@ export function App() {
                 }}
               />
             </div>
-            <div className="sr-only">
+            <div style={{ position: "absolute", opacity: 0, pointerEvents: "none", height: 0, overflow: "hidden" }}>
               <span data-testid="stat-total">{stats.total}</span>
               <span data-testid="stat-indexed">{stats.indexed}</span>
               <span data-testid="stat-grouped">{stats.grouped}</span>

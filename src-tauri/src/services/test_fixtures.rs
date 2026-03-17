@@ -55,6 +55,9 @@ pub fn seed_fixture(
     )?;
     media_count += insert_date_verified(conn, &staging_dir.join("IMG_VERIFIED_001.png"))?;
 
+    db::set_setting(conn, "image_review_phase_state", "complete")?;
+    db::set_setting(conn, "video_review_phase_state", "complete")?;
+
     match profile {
         "dashboard-baseline" => {}
         "date-approval" => {}
