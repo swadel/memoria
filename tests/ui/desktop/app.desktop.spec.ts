@@ -32,7 +32,8 @@ test.describe("Memoria desktop UI", () => {
 
   test("event groups support add/delete and detail navigation", async () => {
     const page = await harness.launch();
-    await page.getByTestId("tab-events").click();
+    await page.evaluate(() => (window as any).__MEMORIA_SET_TAB__("events"));
+    await expect(page.getByTestId("event-groups-card")).toBeVisible();
 
     const firstName = await page.locator("[data-testid^='event-rename-input-']").first().inputValue();
     await page.getByTestId("event-add-group-button").click();
