@@ -184,6 +184,7 @@ pub fn run() {
             commands::metadata::get_dashboard_stats,
             commands::metadata::get_date_review_queue,
             commands::metadata::get_date_media_thumbnail,
+            commands::metadata::get_date_media_thumbnails_batch,
             commands::metadata::apply_date_approval,
             commands::metadata::run_date_enforcement,
             commands::video_review::get_video_review_items,

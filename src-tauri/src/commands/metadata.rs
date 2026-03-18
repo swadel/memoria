@@ -91,6 +91,34 @@ pub fn get_date_media_thumbnail(media_item_id: i64, state: State<'_, AppState>) 
     })
 }
 
+#[tauri::command]
+pub fn get_date_media_thumbnails_batch(
+    media_item_ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<std::collections::HashMap<i64, String>, String> {
+    tauri::async_runtime::block_on(async {
+        let conn = state.open_conn().map_err(|e| e.to_string())?;
+        let root_output = state.root_output();
+        let mut result = std::collections::HashMap::new();
+
+        for id in media_item_ids {
+            let row = conn.query_row(
+                "SELECT filename, COALESCE(current_path, ''), COALESCE(original_path, '') FROM media_items WHERE id=?1",
+                [id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+            );
+            let Ok((filename, current_path, original_path)) = row else {
+                continue;
+            };
+            let resolved = resolve_media_path(&filename, &current_path, &original_path, &root_output);
+            if let Ok(Some(url)) = get_date_media_thumbnail_for_path(resolved, id).await {
+                result.insert(id, url);
+            }
+        }
+        Ok(result)
+    })
+}
+
 fn resolve_media_path(filename: &str, current_path: &str, original_path: &str, root_output: &Path) -> PathBuf {
     let mut candidates = Vec::<PathBuf>::new();
     if !current_path.trim().is_empty() {

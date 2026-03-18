@@ -164,56 +164,32 @@ CREATE INDEX IF NOT EXISTS idx_media_event_group ON media_items(event_group_id);
 }
 
 pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
-    let total: i64 = conn.query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0))?;
-    let indexed: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status='indexed'",
+    // Single-pass conditional aggregation replaces 13+ separate COUNT queries.
+    let (total, indexed, image_review, image_verified, date_review, date_needs_review,
+         date_verified, grouped, filed, video_total, video_excluded): (
+        i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64,
+    ) = conn.query_row(
+        "SELECT
+            COUNT(*),
+            SUM(CASE WHEN status='indexed' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status='indexed' AND COALESCE(image_flags, '') != '' AND COALESCE(image_flags, '[]') != '[]' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status='image_reviewed' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status='image_reviewed' AND date_needs_review=1 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN date_needs_review=1 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status='date_verified' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status='grouped' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status='filed' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN mime_type LIKE 'video/%' AND status IN ('image_reviewed','video_reviewed','date_verified','excluded','grouped','filed') THEN 1 ELSE 0 END),
+            SUM(CASE WHEN mime_type LIKE 'video/%' AND status='excluded' THEN 1 ELSE 0 END)
+         FROM media_items",
         [],
-        |r| r.get(0),
+        |r| Ok((
+            r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
+            r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?,
+        )),
     )?;
-    let image_review: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status='indexed' AND COALESCE(image_flags, '') != '' AND COALESCE(image_flags, '[]') != '[]'",
-        [],
-        |r| r.get(0),
-    )?;
-    let image_verified: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status='image_reviewed'",
-        [],
-        |r| r.get(0),
-    )?;
-    let date_review: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status='image_reviewed' AND date_needs_review=1",
-        [],
-        |r| r.get(0),
-    )?;
-    let date_verified: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status='date_verified'",
-        [],
-        |r| r.get(0),
-    )?;
-    let date_needs_review: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE date_needs_review=1",
-        [],
-        |r| r.get(0),
-    )?;
-    let grouped: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status='grouped'",
-        [],
-        |r| r.get(0),
-    )?;
-    let filed: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE status='filed'",
-        [],
-        |r| r.get(0),
-    )?;
-    let image_flagged_pending: i64 = image_review;
-    let image_phase_state = get_setting(conn, IMAGE_PHASE_STATE_KEY)?
-        .unwrap_or_else(|| "pending".to_string());
-    let video_total: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items
-         WHERE mime_type LIKE 'video/%' AND status IN ('image_reviewed', 'video_reviewed', 'date_verified', 'excluded', 'grouped', 'filed')",
-        [],
-        |r| r.get(0),
-    )?;
+
+    // Video flagged needs parameters, so we keep it as a separate query
     let video_flagged: i64 = conn.query_row(
         "SELECT COUNT(*) FROM media_items
          WHERE mime_type LIKE 'video/%'
@@ -223,11 +199,10 @@ pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         |r| r.get(0),
     )?;
     let video_unreviewed_flagged = video_flagged;
-    let video_excluded: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM media_items WHERE mime_type LIKE 'video/%' AND status='excluded'",
-        [],
-        |r| r.get(0),
-    )?;
+
+    let image_flagged_pending: i64 = image_review;
+    let image_phase_state = get_setting(conn, IMAGE_PHASE_STATE_KEY)?
+        .unwrap_or_else(|| "pending".to_string());
     let video_phase_state = get_setting(conn, VIDEO_PHASE_STATE_KEY)?
         .unwrap_or_else(|| "pending".to_string());
 
@@ -438,16 +413,20 @@ pub fn refresh_event_group_item_counts(conn: &Connection, ids: &[i64]) -> Result
     if ids.is_empty() {
         return Ok(());
     }
-    let mut update_stmt = conn.prepare(
+    // Batch update using IN clause instead of per-id loop
+    let placeholders: Vec<String> = ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+    let sql = format!(
         "UPDATE event_groups
          SET item_count=(
             SELECT COUNT(*) FROM media_items WHERE event_group_id=event_groups.id AND status != 'excluded'
          )
-         WHERE id=?1",
-    )?;
-    for id in ids {
-        update_stmt.execute([id])?;
-    }
+         WHERE id IN ({})",
+        placeholders.join(",")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let param_values: Vec<Box<dyn rusqlite::types::ToSql>> = ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+    stmt.execute(param_refs.as_slice())?;
     Ok(())
 }
 

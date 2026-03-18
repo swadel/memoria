@@ -433,6 +433,12 @@ export async function installBrowserApiMock(page: Page, profile: BrowserFixtureP
               return Promise.resolve(state.dateItems);
             case "get_date_media_thumbnail":
               return Promise.resolve(tinyPngDataUrl);
+            case "get_date_media_thumbnails_batch": {
+              const ids = (args?.mediaItemIds ?? args?.media_item_ids ?? []) as number[];
+              const result: Record<number, string> = {};
+              for (const id of ids) result[id] = tinyPngDataUrl;
+              return Promise.resolve(result);
+            }
             case "get_event_groups":
               return Promise.resolve(state.eventGroups);
             case "get_event_group_items": {

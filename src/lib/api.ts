@@ -142,6 +142,13 @@ export function getDateMediaThumbnail(mediaItemId: number) {
   return invokeCommand<string | null>("get_date_media_thumbnail", { mediaItemId, media_item_id: mediaItemId });
 }
 
+export function getDateMediaThumbnailsBatch(mediaItemIds: number[]) {
+  return invokeCommand<Record<number, string>>("get_date_media_thumbnails_batch", {
+    mediaItemIds,
+    media_item_ids: mediaItemIds,
+  });
+}
+
 export function applyDateApproval(mediaItemId: number, date: string | null) {
   return invokeCommand<void>("apply_date_approval", { mediaItemId, media_item_id: mediaItemId, date });
 }

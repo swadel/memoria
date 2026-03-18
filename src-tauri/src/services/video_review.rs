@@ -6,6 +6,9 @@ use crate::{db, services::{exiftool, runtime_log}};
 
 const VIDEO_PHASE_STATE_KEY: &str = "video_review_phase_state";
 
+/// Maximum number of concurrent ffmpeg poster generation tasks.
+const POSTER_CONCURRENCY: usize = 4;
+
 pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Path, app_handle: Option<&tauri::AppHandle>) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT id, filename, COALESCE(current_path, ''), COALESCE(file_size, 0), duration_secs, video_width, video_height, video_codec
@@ -30,7 +33,15 @@ pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Pat
     let total = all_rows.len();
     runtime_log::emit_pipeline_progress(app_handle, "video_prep", "Preparing video review...", 0, total);
 
-    let mut video_count = 0_i64;
+    // Phase 1: Read metadata and update DB (sequential — requires conn)
+    struct VideoInfo {
+        id: i64,
+        filename: String,
+        media_path: PathBuf,
+        poster_path: PathBuf,
+        needs_poster: bool,
+    }
+    let mut videos: Vec<VideoInfo> = Vec::new();
     for (idx, row) in all_rows.into_iter().enumerate() {
         let (id, filename, current_path, file_size, duration, width, height, codec) = row;
         if current_path.trim().is_empty() {
@@ -57,13 +68,13 @@ pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Pat
             params![resolved_size, resolved_duration, resolved_width, resolved_height, resolved_codec, id],
         )?;
         let poster_path = poster_target_path(root_output, &media_path, id);
-        if !poster_path.exists() {
+        let needs_poster = !poster_path.exists();
+        if needs_poster {
             if let Some(parent) = poster_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let _ = exiftool::create_video_poster_ffmpeg(&media_path, &poster_path).await;
         }
-        video_count += 1;
+        videos.push(VideoInfo { id, filename: filename.clone(), media_path, poster_path, needs_poster });
         runtime_log::emit_pipeline_progress(
             app_handle,
             "video_prep",
@@ -73,6 +84,24 @@ pub async fn prepare_video_review(conn: &rusqlite::Connection, root_output: &Pat
         );
     }
 
+    // Phase 2: Generate posters in parallel (no conn needed)
+    let poster_tasks: Vec<&VideoInfo> = videos.iter().filter(|v| v.needs_poster).collect();
+    if !poster_tasks.is_empty() {
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(POSTER_CONCURRENCY));
+        let mut join_set = tokio::task::JoinSet::new();
+        for video in poster_tasks {
+            let sem = semaphore.clone();
+            let input = video.media_path.clone();
+            let output = video.poster_path.clone();
+            join_set.spawn(async move {
+                let _permit = sem.acquire().await;
+                let _ = exiftool::create_video_poster_ffmpeg(&input, &output).await;
+            });
+        }
+        while join_set.join_next().await.is_some() {}
+    }
+
+    let video_count = videos.len() as i64;
     let next_state = if video_count > 0 { "in_progress" } else { "complete" };
     db::set_setting(conn, VIDEO_PHASE_STATE_KEY, next_state)?;
     Ok(())

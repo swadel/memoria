@@ -1,10 +1,11 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::{
+    io::{BufRead, BufReader, Write as IoWrite},
     path::{Path, PathBuf},
-    sync::OnceLock,
+    process::Stdio,
+    sync::{Mutex, OnceLock},
 };
-use std::process::Stdio;
 use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -42,7 +43,168 @@ pub fn tool_health_snapshot() -> ToolHealthSnapshot {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Persistent exiftool (-stay_open mode)
+// ---------------------------------------------------------------------------
+
+struct ExiftoolInner {
+    _child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    reader: BufReader<std::process::ChildStdout>,
+    counter: u64,
+}
+
+struct PersistentExiftool {
+    bin: PathBuf,
+    inner: Mutex<Option<ExiftoolInner>>,
+}
+
+impl PersistentExiftool {
+    fn new(bin: PathBuf) -> Self {
+        let inner = Self::spawn(&bin);
+        PersistentExiftool {
+            bin,
+            inner: Mutex::new(inner),
+        }
+    }
+
+    fn spawn(bin: &Path) -> Option<ExiftoolInner> {
+        let mut child = std::process::Command::new(bin)
+            .arg("-stay_open")
+            .arg("True")
+            .arg("-@")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let stdin = child.stdin.take()?;
+        let stdout = child.stdout.take()?;
+        Some(ExiftoolInner {
+            _child: child,
+            stdin,
+            reader: BufReader::new(stdout),
+            counter: 0,
+        })
+    }
+
+    fn execute(&self, args: &[&str]) -> Result<String> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("exiftool mutex poisoned"))?;
+
+        // Re-spawn if previous process died
+        if guard.is_none() {
+            *guard = Self::spawn(&self.bin);
+        }
+
+        let inner = guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("exiftool process unavailable"))?;
+        inner.counter += 1;
+        let tag = inner.counter;
+
+        // Write each argument on its own line, then the execute sentinel
+        for arg in args {
+            if writeln!(inner.stdin, "{}", arg).is_err() {
+                *guard = None;
+                return Err(anyhow!("exiftool stdin write failed"));
+            }
+        }
+        if writeln!(inner.stdin, "-execute{}", tag).is_err() {
+            *guard = None;
+            return Err(anyhow!("exiftool stdin write failed"));
+        }
+        if inner.stdin.flush().is_err() {
+            *guard = None;
+            return Err(anyhow!("exiftool stdin flush failed"));
+        }
+
+        // Read lines until the {readyN} sentinel
+        let sentinel = format!("{{ready{tag}}}");
+        let mut output = String::new();
+        loop {
+            let mut line = String::new();
+            match inner.reader.read_line(&mut line) {
+                Ok(0) => {
+                    *guard = None;
+                    return Err(anyhow!("exiftool process ended unexpectedly"));
+                }
+                Ok(_) => {
+                    if line.trim() == sentinel {
+                        break;
+                    }
+                    output.push_str(&line);
+                }
+                Err(_) => {
+                    *guard = None;
+                    return Err(anyhow!("exiftool read error"));
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+static PERSISTENT_EXIFTOOL: OnceLock<Option<PersistentExiftool>> = OnceLock::new();
+
+fn persistent_exiftool() -> Option<&'static PersistentExiftool> {
+    PERSISTENT_EXIFTOOL
+        .get_or_init(|| exiftool_binary().map(PersistentExiftool::new))
+        .as_ref()
+}
+
+/// Try to execute an exiftool read command via the persistent process.
+/// Returns the parsed JSON Value on success, or None on any failure.
+fn try_persistent_json(args: &[&str]) -> Option<serde_json::Value> {
+    let pe = persistent_exiftool()?;
+    let output = pe.execute(args).ok()?;
+    serde_json::from_str(output.trim()).ok()
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 pub async fn read_metadata(path: &Path) -> Result<MetadataInfo> {
+    let path_str = path.to_string_lossy().to_string();
+
+    // Try persistent exiftool (via spawn_blocking to avoid blocking the async runtime)
+    let path_for_blocking = path_str.clone();
+    if persistent_exiftool().is_some() {
+        let result = tokio::task::spawn_blocking(move || {
+            try_persistent_json(&[
+                "-j",
+                "-n",
+                "-DateTimeOriginal",
+                "-CreateDate",
+                "-ModifyDate",
+                "-ImageWidth",
+                "-ImageHeight",
+                "-MIMEType",
+                "-Duration",
+                "-VideoCodec",
+                "-CompressorName",
+                "-CodecID",
+                "-ContentIdentifier",
+                "-ComAppleQuickTimeContentIdentifier",
+                "-Make",
+                "-Model",
+                &path_for_blocking,
+            ])
+        })
+        .await;
+
+        if let Ok(Some(parsed)) = result {
+            if let Some(first) = parsed.as_array().and_then(|arr| arr.first()) {
+                return Ok(parse_metadata_value(first));
+            }
+        }
+    }
+
+    // Fallback: spawn a one-shot process
     let Some(exiftool_bin) = exiftool_binary() else {
         return Ok(MetadataInfo::default());
     };
@@ -166,6 +328,29 @@ pub async fn write_all_dates(path: &Path, date: &str) -> Result<()> {
 }
 
 pub async fn read_gps_coordinates(path: &Path) -> Result<Option<(f64, f64)>> {
+    let path_str = path.to_string_lossy().to_string();
+
+    // Try persistent exiftool
+    if persistent_exiftool().is_some() {
+        let path_for_blocking = path_str.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            try_persistent_json(&["-j", "-n", "-GPSLatitude", "-GPSLongitude", &path_for_blocking])
+        })
+        .await;
+
+        if let Ok(Some(parsed)) = result {
+            if let Some(first) = parsed.as_array().and_then(|arr| arr.first()) {
+                let lat = first.get("GPSLatitude").and_then(|v| v.as_f64());
+                let lon = first.get("GPSLongitude").and_then(|v| v.as_f64());
+                return Ok(match (lat, lon) {
+                    (Some(a), Some(b)) => Some((a, b)),
+                    _ => None,
+                });
+            }
+        }
+    }
+
+    // Fallback: spawn a one-shot process
     let Some(exiftool_bin) = exiftool_binary() else {
         return Ok(None);
     };
@@ -197,8 +382,26 @@ pub async fn read_gps_coordinates(path: &Path) -> Result<Option<(f64, f64)>> {
 }
 
 /// Synchronous fast-path that extracts only camera Make/Model.
-/// Uses std::process::Command so it can be called from rayon worker threads.
+/// Uses the persistent exiftool process when available, falls back to
+/// spawning a one-shot process so it can be called from rayon worker threads.
 pub fn read_camera_metadata_sync(path: &Path) -> Option<(Option<String>, Option<String>)> {
+    let path_str = path.to_string_lossy().to_string();
+
+    // Try persistent exiftool
+    if let Some(parsed) = try_persistent_json(&["-j", "-n", "-Make", "-Model", &path_str]) {
+        let first = parsed.as_array().and_then(|arr| arr.first())?;
+        let make = first
+            .get("Make")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        let model = first
+            .get("Model")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        return Some((make, model));
+    }
+
+    // Fallback: one-shot process spawn
     let exiftool_bin = exiftool_binary()?;
     let output = std::process::Command::new(exiftool_bin)
         .arg("-j")
@@ -215,8 +418,14 @@ pub fn read_camera_metadata_sync(path: &Path) -> Option<(Option<String>, Option<
     }
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     let first = parsed.as_array().and_then(|arr| arr.first())?;
-    let make = first.get("Make").and_then(|v| v.as_str()).map(ToString::to_string);
-    let model = first.get("Model").and_then(|v| v.as_str()).map(ToString::to_string);
+    let make = first
+        .get("Make")
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string);
+    let model = first
+        .get("Model")
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string);
     Some((make, model))
 }
 
@@ -393,8 +602,20 @@ mod tests {
 
     #[tokio::test]
     async fn video_poster_generation_errors_for_invalid_input() {
-        let temp = std::env::temp_dir().join(format!("memoria-video-poster-{}.jpg", rand::random::<u64>()));
-        let result = create_video_poster_ffmpeg(std::path::Path::new("C:\\missing\\input.mov"), &temp).await;
+        let temp = std::env::temp_dir().join(format!(
+            "memoria-video-poster-{}.jpg",
+            rand::random::<u64>()
+        ));
+        let result =
+            create_video_poster_ffmpeg(std::path::Path::new("C:\\missing\\input.mov"), &temp).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn persistent_exiftool_sentinel_format() {
+        // Verify the sentinel format matches exiftool's -stay_open output
+        let tag = 42u64;
+        let sentinel = format!("{{ready{tag}}}");
+        assert_eq!(sentinel, "{ready42}");
     }
 }

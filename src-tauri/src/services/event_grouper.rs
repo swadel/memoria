@@ -219,7 +219,7 @@ fn evenly_distributed_indices(total: usize, target: usize) -> Vec<usize> {
     (0..n).map(|i| (i as f64 * step).round() as usize).collect()
 }
 
-pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::AppHandle>) -> Result<()> {
+pub async fn run(conn: &mut Connection, ai: &AiClient, app_handle: Option<&tauri::AppHandle>) -> Result<()> {
     runtime_log::info("event_grouper", "Starting event grouping run.");
     let cluster_gap_days = crate::db::get_setting(conn, "grouping_threshold_days")
         .ok()
@@ -231,38 +231,45 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
         "event_grouper",
         format!("Using grouping threshold days = {cluster_gap_days}."),
     );
+
+    // Wrap all DB mutations in a transaction for atomicity and performance.
+    // This prevents orphaned items on crash and reduces fsync overhead from
+    // one-per-statement to one-at-commit.
+    let tx = conn.transaction()?;
+
     // Clear existing group links first to avoid FK violations when stale grouped/filed
     // rows still reference prior event_groups from earlier runs.
-    conn.execute("UPDATE media_items SET event_group_id=NULL WHERE event_group_id IS NOT NULL", [])?;
-    conn.execute("DELETE FROM event_groups", [])?;
-
-    let mut stmt = conn.prepare(
-        "SELECT id, COALESCE(date_taken, ''), filename, COALESCE(current_path, '')
-         FROM media_items
-         WHERE status='date_verified' AND (date_needs_review=0 OR date_needs_review IS NULL)",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-        ))
-    })?;
+    tx.execute("UPDATE media_items SET event_group_id=NULL WHERE event_group_id IS NOT NULL", [])?;
+    tx.execute("DELETE FROM event_groups", [])?;
 
     let mut by_year: BTreeMap<i32, Vec<ClusterItem>> = BTreeMap::new();
-    for row in rows {
-        let (id, date_raw, filename, current_path) = row?;
-        if let Some(capture_at) = parse_capture_datetime(&date_raw) {
-            by_year
-                .entry(capture_at.date().year())
-                .or_default()
-                .push(ClusterItem {
-                    id,
-                    capture_at,
-                    filename,
-                    current_path,
-                });
+    {
+        let mut stmt = tx.prepare(
+            "SELECT id, COALESCE(date_taken, ''), filename, COALESCE(current_path, '')
+             FROM media_items
+             WHERE status='date_verified' AND (date_needs_review=0 OR date_needs_review IS NULL)",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, date_raw, filename, current_path) = row?;
+            if let Some(capture_at) = parse_capture_datetime(&date_raw) {
+                by_year
+                    .entry(capture_at.date().year())
+                    .or_default()
+                    .push(ClusterItem {
+                        id,
+                        capture_at,
+                        filename,
+                        current_path,
+                    });
+            }
         }
     }
     runtime_log::info(
@@ -272,8 +279,8 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
 
     let http = Client::new();
     let mut geocoder = ReverseGeocoder::new();
-    geocoder.load_persistent_cache(conn);
-    let home_config = read_home_location_config(conn);
+    geocoder.load_persistent_cache(&tx);
+    let home_config = read_home_location_config(&tx);
     let total_years = by_year.len();
     let mut total_groups = 0_i64;
     for (year_idx, (year, mut items)) in by_year.into_iter().enumerate() {
@@ -304,7 +311,7 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
                 cluster_idx - 1,
                 cluster_total,
             );
-            let outcome = name_cluster(year, &cluster, ai, &http, &mut geocoder, conn, home_config.as_ref()).await?;
+            let outcome = name_cluster(year, &cluster, ai, &http, &mut geocoder, &tx, home_config.as_ref()).await?;
             let naming = outcome.suggestion;
             let normalized_for_split = naming
                 .folder_name
@@ -337,8 +344,8 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
 
             let start_date = cluster.first().map(|x| x.capture_at.date()).expect("cluster has item");
             let end_date = cluster.last().map(|x| x.capture_at.date()).expect("cluster has item");
-            let final_folder_name = apply_low_confidence_fallback_if_needed(conn, year, start_date, &naming, outcome.location_facts.as_ref())?;
-            let final_folder_name = resolve_folder_name_collision(conn, year, &final_folder_name)?;
+            let final_folder_name = apply_low_confidence_fallback_if_needed(&tx, year, start_date, &naming, outcome.location_facts.as_ref())?;
+            let final_folder_name = resolve_folder_name_collision(&tx, year, &final_folder_name)?;
             let simple_name = final_folder_name
                 .strip_prefix(&format!("{year} - "))
                 .unwrap_or(final_folder_name.as_str())
@@ -365,7 +372,7 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
                 0
             };
 
-            conn.execute(
+            tx.execute(
                 "INSERT INTO event_groups(
                     year, name, folder_name, ai_suggested_name, is_misc, user_approved, item_count, start_date, end_date,
                     ai_event_type, ai_confidence, ai_reasoning, ai_prompt_version, ai_model_used, ai_location_used,
@@ -401,8 +408,8 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
             )?;
             // Capture the event_group row id immediately. A later audit_log insert also
             // updates last_insert_rowid(), which would otherwise break FK assignment.
-            let group_id = conn.last_insert_rowid();
-            conn.execute(
+            let group_id = tx.last_insert_rowid();
+            tx.execute(
                 "INSERT INTO audit_log(media_item_id, action, source, details)
                  VALUES(NULL, 'ai_event_naming_decision', 'event_grouper', ?1)",
                 params![json!({
@@ -431,11 +438,22 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
                 .to_string()],
             )?;
             total_groups += 1;
-            for item in cluster {
-                conn.execute(
-                    "UPDATE media_items SET event_group_id=?1, status='grouped', updated_at=CURRENT_TIMESTAMP WHERE id=?2",
-                    params![group_id, item.id],
-                )?;
+
+            // Batch update: assign all cluster items to this group in a single statement
+            if !cluster.is_empty() {
+                let placeholders: Vec<String> = cluster.iter().enumerate().map(|(i, _)| format!("?{}", i + 2)).collect();
+                let sql = format!(
+                    "UPDATE media_items SET event_group_id=?1, status='grouped', updated_at=CURRENT_TIMESTAMP WHERE id IN ({})",
+                    placeholders.join(",")
+                );
+                let mut stmt = tx.prepare(&sql)?;
+                let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+                param_values.push(Box::new(group_id));
+                for item in &cluster {
+                    param_values.push(Box::new(item.id));
+                }
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+                stmt.execute(param_refs.as_slice())?;
             }
             runtime_log::emit_pipeline_progress(
                 app_handle,
@@ -446,6 +464,7 @@ pub async fn run(conn: &Connection, ai: &AiClient, app_handle: Option<&tauri::Ap
             );
         }
     }
+    tx.commit()?;
     runtime_log::info("event_grouper", format!("Grouping complete. total_groups={total_groups}."));
     Ok(())
 }
@@ -1042,7 +1061,7 @@ mod tests {
     async fn excluded_items_are_not_included_in_grouping_query() {
         let mut db_path = std::env::temp_dir();
         db_path.push(format!("memoria-group-excluded-{}.db", rand::random::<u64>()));
-        let conn = crate::db::init_db(&db_path).expect("db");
+        let mut conn = crate::db::init_db(&db_path).expect("db");
         conn.execute(
             "INSERT INTO media_items(icloud_id, filename, current_path, status, date_taken, date_needs_review, mime_type)
              VALUES('a1', 'active.jpg', 'C:\\tmp\\active.jpg', 'date_verified', '2026-01-01', 0, 'image/jpeg')",
@@ -1056,7 +1075,7 @@ mod tests {
         )
         .expect("excluded");
         let ai = crate::services::ai_client::AiClient::new(None, None, crate::services::ai_client::AiRoutingConfig::default());
-        run(&conn, &ai, None).await.expect("run");
+        run(&mut conn, &ai, None).await.expect("run");
         let grouped_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM media_items WHERE status='grouped'", [], |r| r.get(0))
             .expect("grouped count");
@@ -1071,7 +1090,7 @@ mod tests {
     async fn run_clears_stale_event_group_links_before_delete() {
         let mut db_path = std::env::temp_dir();
         db_path.push(format!("memoria-group-fk-reset-{}.db", rand::random::<u64>()));
-        let conn = crate::db::init_db(&db_path).expect("db");
+        let mut conn = crate::db::init_db(&db_path).expect("db");
         conn.execute(
             "INSERT INTO event_groups(id, year, name, folder_name, user_approved, item_count)
              VALUES(999, 2026, 'Old Group', '2026 - Old Group', 0, 1)",
@@ -1093,7 +1112,7 @@ mod tests {
 
         let ai =
             crate::services::ai_client::AiClient::new(None, None, crate::services::ai_client::AiRoutingConfig::default());
-        run(&conn, &ai, None).await.expect("grouping run should succeed");
+        run(&mut conn, &ai, None).await.expect("grouping run should succeed");
 
         let stale_link_count: i64 = conn
             .query_row(

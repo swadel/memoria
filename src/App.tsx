@@ -1,4 +1,4 @@
-import { type CSSProperties, type ComponentProps, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type ComponentProps, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { listen } from "@tauri-apps/api/event";
 import { AnimatePresence, motion } from "framer-motion";
@@ -25,6 +25,7 @@ import {
   getAppConfiguration,
   getDashboardStats,
   getDateMediaThumbnail,
+  getDateMediaThumbnailsBatch,
   getDateReviewQueue,
   getEventGroupItems,
   getEventGroupMediaPreview,
@@ -219,19 +220,11 @@ export function App() {
     derivePipelineStages(DEFAULT_STATS)
   );
 
-  async function refreshAll() {
-    const [nextStats, nextDateItems, nextGroups, nextImageItems, nextVideoItems] = await Promise.all([
-      getDashboardStats(),
-      getDateReviewQueue(),
-      getEventGroups(),
-      getImageReviewItems(true),
-      getVideoReviewItems(true)
-    ]);
+  async function refreshAll(activeTab?: Tab) {
+    const currentTab = activeTab ?? tab;
+    // Always fetch stats (lightweight)
+    const nextStats = await getDashboardStats();
     setStats(nextStats);
-    setDateItems(nextDateItems);
-    setGroups(nextGroups);
-    setImageItems(nextImageItems);
-    setVideoItems(nextVideoItems);
     setPipelineStages((prev) => {
       const derived = derivePipelineStages(nextStats);
       return {
@@ -243,6 +236,19 @@ export function App() {
         finalize: prev.finalize === "failed" ? "failed" : derived.finalize
       };
     });
+    // Only fetch data for the active tab to reduce IPC overhead
+    if (currentTab === "dates" || currentTab === "dashboard") {
+      setDateItems(await getDateReviewQueue());
+    }
+    if (currentTab === "events" || currentTab === "dashboard") {
+      setGroups(await getEventGroups());
+    }
+    if (currentTab === "images" || currentTab === "dashboard") {
+      setImageItems(await getImageReviewItems(true));
+    }
+    if (currentTab === "videos" || currentTab === "dashboard") {
+      setVideoItems(await getVideoReviewItems(true));
+    }
   }
 
   useEffect(() => {
@@ -288,11 +294,13 @@ export function App() {
 
   useEffect(() => {
     if (DISABLE_UI_POLLING) return;
+    // Refresh immediately when the user switches tabs so data is fresh
+    refreshAll(tab).catch(() => undefined);
     const timer = setInterval(() => {
-      refreshAll().catch(() => undefined);
+      refreshAll(tab).catch(() => undefined);
     }, Math.max(POLL_INTERVAL_MS, 500));
     return () => clearInterval(timer);
-  }, []);
+  }, [tab]);
 
   useEffect(() => {
     (window as any).__MEMORIA_SET_TAB__ = setTab;
@@ -2761,20 +2769,20 @@ function ImageReviewView({
   }, [visibleItems]);
 
   useEffect(() => {
-    const pending = visibleItems
+    const pendingItems = visibleItems
       .filter((item) => !thumbs[item.id])
-      .slice(0, 20)
-      .map((item) =>
-        getDateMediaThumbnail(item.id).then((src) => ({ id: item.id, src: src ?? getDateThumbFallbackDataUrl(item.filename) }))
-      );
-    if (!pending.length) return;
-    Promise.all(pending).then((rows) => {
+      .slice(0, 20);
+    if (!pendingItems.length) return;
+    const ids = pendingItems.map((item) => item.id);
+    getDateMediaThumbnailsBatch(ids).then((batch) => {
       setThumbs((prev) => {
         const next = { ...prev };
-        for (const row of rows) next[row.id] = row.src;
+        for (const item of pendingItems) {
+          next[item.id] = batch[item.id] ?? getDateThumbFallbackDataUrl(item.filename);
+        }
         return next;
       });
-    });
+    }).catch(() => undefined);
   }, [visibleItems, thumbs]);
 
   useEffect(() => {
@@ -2929,7 +2937,7 @@ function ImageReviewView({
           data-testid="image-virtual-grid"
           style={{ height: "56vh", overflow: "auto", position: "relative" }}
         >
-          <motion.div layout style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const startIndex = virtualRow.index * columnCount;
               const rowItems = visibleItems.slice(startIndex, startIndex + columnCount);
@@ -2942,7 +2950,6 @@ function ImageReviewView({
                       variants={GRID_ITEM_VARIANTS}
                       initial="hidden"
                       animate="show"
-                      layout
                       transition={{ delay: Math.min((startIndex + offset) * 0.05, 0.35), duration: 0.2 }}
                       style={{ flex: "1 1 0", minWidth: 0 }}
                     >
@@ -2962,7 +2969,7 @@ function ImageReviewView({
                 </div>
               );
             })}
-          </motion.div>
+          </div>
         </div>
       )}
 
@@ -3071,7 +3078,7 @@ function ImageReviewView({
   );
 }
 
-function ImageCard({
+const ImageCard = memo(function ImageCard({
   item,
   selected,
   thumbnail,
@@ -3140,7 +3147,7 @@ function ImageCard({
       </div>
     </div>
   );
-}
+});
 
 function VideoReviewView({
   items,
@@ -3201,22 +3208,20 @@ function VideoReviewView({
   }, [filtered]);
 
   useEffect(() => {
-    const pending = filtered
+    const pendingItems = filtered
       .filter((item) => !thumbs[item.id])
-      .slice(0, 12)
-      .map((item) =>
-        getDateMediaThumbnail(item.id)
-          .then((src) => ({ id: item.id, src: src ?? "" }))
-          .catch(() => ({ id: item.id, src: "" }))
-      );
-    if (pending.length === 0) return;
-    Promise.all(pending).then((entries) => {
+      .slice(0, 12);
+    if (pendingItems.length === 0) return;
+    const ids = pendingItems.map((item) => item.id);
+    getDateMediaThumbnailsBatch(ids).then((batch) => {
       setThumbs((prev) => {
         const next = { ...prev };
-        for (const entry of entries) next[entry.id] = entry.src;
+        for (const item of pendingItems) {
+          next[item.id] = batch[item.id] ?? "";
+        }
         return next;
       });
-    });
+    }).catch(() => undefined);
   }, [filtered, thumbs]);
 
   useEffect(() => {
@@ -3424,7 +3429,7 @@ function VideoReviewView({
           data-testid="video-virtual-grid"
           style={{ height: `${scrollHeight}px`, overflow: "auto", position: "relative" }}
         >
-          <motion.div layout style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const startIndex = virtualRow.index * columnCount;
               const rowItems = filtered.slice(startIndex, startIndex + columnCount);
@@ -3450,7 +3455,6 @@ function VideoReviewView({
                         variants={GRID_ITEM_VARIANTS}
                         initial="hidden"
                         animate="show"
-                        layout
                         transition={{ delay: Math.min((startIndex + offset) * 0.05, 0.35), duration: 0.2 }}
                         style={{ flex: "1 1 0", minWidth: 0, position: "relative" }}
                       >
@@ -3505,7 +3509,7 @@ function VideoReviewView({
                 </div>
               );
             })}
-          </motion.div>
+          </div>
         </div>
       </div>
 

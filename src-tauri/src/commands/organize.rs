@@ -19,7 +19,7 @@ const DUPLICATE_GROUP_NAME_ERROR: &str = "A group with this name already exists"
 pub fn run_event_grouping(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     tauri::async_runtime::block_on(async {
         runtime_log::info("commands.organize", "Invoked run_event_grouping.");
-        let conn = state.open_conn().map_err(|e| e.to_string())?;
+        let mut conn = state.open_conn().map_err(|e| e.to_string())?;
         let video_total: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM media_items WHERE mime_type LIKE 'video/%' AND status IN ('image_reviewed', 'excluded')",
@@ -34,7 +34,7 @@ pub fn run_event_grouping(app_handle: tauri::AppHandle, state: State<'_, AppStat
             return Err("Video Review must be completed before Event Grouping.".to_string());
         }
         let ai = state.ai_client().await;
-        event_grouper::run(&conn, &ai, Some(&app_handle))
+        event_grouper::run(&mut conn, &ai, Some(&app_handle))
             .await
             .map_err(|e| e.to_string())?;
         runtime_log::info("commands.organize", "run_event_grouping completed successfully.");
